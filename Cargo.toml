@@ -1,14 +1,14 @@
 [package]
-name = "rsnbs"
-version = "0.1.3"
-authors = ["kemiamu <kemya@tuta.io>", "Joppe Stuyck <joppe@stuyck.be>"]
+name = "nbs-fractal"
+version = "0.1.0"
+authors = ["kemiamu <kemya@tuta.io>"]
 edition = "2024"
 default-run = "cli"
-description = "A fundamental library for working with the OpenNBS .nbs format"
+description = "Experimental repetition-pattern reconstruction of OpenNBS .nbs songs"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/omninbs/rsnbs"
 readme = "README.md"
-keywords = ["nbs", "music", "minecraft", "file-format"]
+keywords = ["nbs", "music", "minecraft", "redstone"]
 categories = ["games"]
 
 [features]
