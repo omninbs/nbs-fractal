@@ -1,16 +1,32 @@
 //! Block state projections for notes and instruments.
 
-use crate::note::{ImitateInstrument, Instrument, Tone};
 use mcdata::GenericBlockState;
+use rsnbs::note::{ImitateInstrument, Instrument, Tone};
 use std::{borrow::Cow, collections::HashMap};
+
+/// whether this tone is renderable: built-in instrument with a minecraft note.
+fn is_valid(tone: &Tone) -> bool {
+    !matches!(tone.instrument, Instrument::Custom(_)) && tone.key.minecraft_note().is_some()
+}
 
 // Tone block states
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-impl Tone {
+/// Block states projected from a [`Tone`].
+pub trait ToneBlocks {
     /// returns the minecraft note block block state for this tone.
-    pub fn note_block_state(&self) -> Option<GenericBlockState> {
+    fn note_block_state(&self) -> Option<GenericBlockState>;
+
+    /// returns the block under the note block for this instrument's sound.
+    fn instrument_block_state(&self) -> Option<GenericBlockState>;
+
+    /// returns the mob head block for this tone, if it is a mob head instrument.
+    fn head_block_state(&self) -> Option<GenericBlockState>;
+}
+
+impl ToneBlocks for Tone {
+    fn note_block_state(&self) -> Option<GenericBlockState> {
         let note = self.key.minecraft_note()?;
         let instr = self.instrument.note_property();
         let properties = HashMap::from([
@@ -24,9 +40,8 @@ impl Tone {
         })
     }
 
-    /// returns the block under the note block for this instrument's sound.
-    pub fn instrument_block_state(&self) -> Option<GenericBlockState> {
-        if !self.is_valid() || matches!(self.instrument, Instrument::Imitate(_)) {
+    fn instrument_block_state(&self) -> Option<GenericBlockState> {
+        if !is_valid(self) || matches!(self.instrument, Instrument::Imitate(_)) {
             return None;
         }
         let block = self.instrument.block_resource().unwrap();
@@ -40,9 +55,8 @@ impl Tone {
         })
     }
 
-    /// returns the mob head block for this tone, if it is a mob head instrument.
-    pub fn head_block_state(&self) -> Option<GenericBlockState> {
-        if !self.is_valid() || !matches!(self.instrument, Instrument::Imitate(_)) {
+    fn head_block_state(&self) -> Option<GenericBlockState> {
+        if !is_valid(self) || !matches!(self.instrument, Instrument::Imitate(_)) {
             return None;
         }
         let block = self.instrument.block_resource().unwrap();
@@ -57,9 +71,23 @@ impl Tone {
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-impl Instrument {
+/// Block states projected from an [`Instrument`].
+pub trait InstrumentBlocks {
     /// returns the minecraft instrument property string for note block state.
-    pub fn note_property(&self) -> &'static str {
+    fn note_property(&self) -> &'static str;
+
+    /// returns the block resource name for this instrument.
+    fn block_resource(&self) -> Option<&'static str>;
+
+    /// returns the block under the note block for this instrument's sound.
+    fn instrument_block(&self) -> Option<GenericBlockState>;
+
+    /// returns the mob head block for this instrument, if it is a mob head instrument.
+    fn head_block(&self) -> Option<GenericBlockState>;
+}
+
+impl InstrumentBlocks for Instrument {
+    fn note_property(&self) -> &'static str {
         match self {
             Self::Harp => "harp",
             Self::DoubleBass => "bass",
@@ -86,8 +114,7 @@ impl Instrument {
         }
     }
 
-    /// returns the block resource name for this instrument.
-    pub fn block_resource(&self) -> Option<&'static str> {
+    fn block_resource(&self) -> Option<&'static str> {
         Some(match self {
             Self::Harp => "minecraft:dirt",
             Self::DoubleBass => "minecraft:oak_planks",
@@ -114,8 +141,7 @@ impl Instrument {
         })
     }
 
-    /// returns the block under the note block for this instrument's sound.
-    pub fn instrument_block(&self) -> Option<GenericBlockState> {
+    fn instrument_block(&self) -> Option<GenericBlockState> {
         if matches!(self, Self::Imitate(_)) {
             return None;
         }
@@ -126,8 +152,7 @@ impl Instrument {
         })
     }
 
-    /// returns the mob head block for this instrument, if it is a mob head instrument.
-    pub fn head_block(&self) -> Option<GenericBlockState> {
+    fn head_block(&self) -> Option<GenericBlockState> {
         if !matches!(self, Self::Imitate(_)) {
             return None;
         }
@@ -143,9 +168,17 @@ impl Instrument {
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-impl ImitateInstrument {
+/// Block states projected from an [`ImitateInstrument`].
+pub trait ImitateBlocks {
     /// returns the minecraft instrument property string for note block state.
-    pub fn note_property(self) -> &'static str {
+    fn note_property(self) -> &'static str;
+
+    /// returns the block resource name for this mob head.
+    fn block_resource(self) -> &'static str;
+}
+
+impl ImitateBlocks for ImitateInstrument {
+    fn note_property(self) -> &'static str {
         match self {
             Self::Creeper => "creeper",
             Self::Skeleton => "skeleton",
@@ -157,8 +190,7 @@ impl ImitateInstrument {
         }
     }
 
-    /// returns the block resource name for this mob head.
-    pub fn block_resource(self) -> &'static str {
+    fn block_resource(self) -> &'static str {
         match self {
             Self::Creeper => "minecraft:creeper_head",
             Self::Skeleton => "minecraft:skeleton_skull",

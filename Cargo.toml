@@ -3,26 +3,24 @@ name = "nbs-fractal"
 version = "0.1.0"
 authors = ["kemiamu <kemya@tuta.io>"]
 edition = "2024"
-default-run = "cli"
 description = "Experimental repetition-pattern reconstruction of OpenNBS .nbs songs"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/omninbs/rsnbs"
 readme = "README.md"
 keywords = ["nbs", "music", "minecraft", "redstone"]
 categories = ["games"]
 
-[features]
-default = ["cli"]
-cli = ["dep:clap", "clap/derive"]
-
 [dependencies]
-clap = { version = "4.6.1", optional = true }
+clap = { version = "4.6.1", features = ["derive"] }
 counter = "0.7.1"
-encoding_rs = "0.8.35"
 itertools = "0.15.0"
 mcdata = "0.4.0"
 rustmatica = "0.5.2"
-thiserror = "2.0.18"
+
+rsnbs = "0.1.4"
 
 [dev-dependencies]
 ordered-float = "5.3.0"
+
+[[bin]]
+name = "nbs-fractal"
+path = "src/bin/cli.rs"

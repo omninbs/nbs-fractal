@@ -1,10 +1,11 @@
 //! Tapped delay line layout for NBS song projection.
 
-use super::{Arranged, Axis, CompactLayout, EdgeArranged, Facing, Layout, WireConn, WithFloor};
-use super::{chain_block, observer, redstone_torch, redstone_wire, repeater, wire_state};
+use super::{Arranged, Axis, CompactLayout, EdgeArranged, Facing, Layout, ToneBlocks, WireConn};
+use super::{WithFloor, chain_block, observer, redstone_torch, redstone_wire, repeater, wire_state};
 use crate::analysis::BoundedTec;
-use crate::note::{Instrument, Key, Notes, Tone};
-use crate::types::{RedStoneTick, Tick};
+use crate::RedStoneTick;
+use rsnbs::note::{Instrument, Key, Notes, Tone};
+use rsnbs::types::Tick;
 use mcdata::{GenericBlockState, util::BlockPos};
 use std::num::NonZero;
 
@@ -38,7 +39,9 @@ impl TappedLayout {
         for (lyr, tec) in tecs.into_iter().enumerate() {
             let tec = tec.into_inner();
             let repeater_coarse = tec.min_gap().and_then(|gap| NonZero::new(gap / 2));
-            let notes = Notes::<RedStoneTick, Vec<Tone>>::from(tec.kernel)
+            let notes = tec
+                .kernel
+                .into_notes()
                 .into_iter()
                 .map(|(tick, tones)| (tick + 2 * lyr as u32, tones))
                 .collect::<Notes<RedStoneTick, Vec<Tone>>>();

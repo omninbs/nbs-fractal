@@ -1,9 +1,9 @@
 use clap::Parser;
-use rsnbs::analysis::reuse::{plan_to_tecs, reuse_flow};
-use rsnbs::analysis::{BoundedTec, TePlane, TransEqClass};
+use nbs_fractal::analysis::reuse::{plan_to_tecs, reuse_flow};
+use nbs_fractal::analysis::{BoundedTec, TePlane, TransEqClass};
+use nbs_fractal::schematic::{Layout, MultiCompactLayout, MultiLinearLayout};
+use nbs_fractal::schematic::{StackedLinearLayout, TappedLayout, WithFloor};
 use rsnbs::note::{Note, Notes, Tone};
-use rsnbs::schematic::{Layout, MultiCompactLayout, MultiLinearLayout};
-use rsnbs::schematic::{StackedLinearLayout, TappedLayout, WithFloor};
 use rsnbs::song::Song;
 use rsnbs::types::{Tick, TimeAnchor};
 use rustmatica::Litematic;
@@ -18,7 +18,7 @@ use std::str::FromStr;
 
 #[derive(Parser)]
 #[command(
-    name = "rsnbs",
+    name = "nbs-fractal",
     about = "Generate Minecraft litematic projections from NBS songs"
 )]
 enum Cli {
@@ -263,7 +263,7 @@ impl FromStr for Rule {
 
 /// Builds the schematic, wrapping the layout in a floor platform when requested.
 fn build_schematic<L: Layout>(layout: L, floor: Floor, description: String) -> Litematic {
-    const AUTHOR: &str = "rsnbs";
+    const AUTHOR: &str = "nbs-fractal";
     match floor {
         Floor::None => layout.as_litematic(description, AUTHOR),
         _ => WithFloor::new(layout, floor.full()).as_litematic(description, AUTHOR),

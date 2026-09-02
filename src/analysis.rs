@@ -4,10 +4,10 @@
 //! types and abstractions live here, while decomposition algorithms live
 //! in the [`reuse`] submodule.
 
-use crate::note::Notes;
-use crate::types::{Tick, TimeAnchor};
 use counter::Counter;
 use itertools::{Itertools, iproduct};
+use rsnbs::note::Notes;
+use rsnbs::types::{Tick, TimeAnchor};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -71,9 +71,10 @@ impl<T: TimeAnchor, E: Into<U>, U: Event> FromIterator<(T, E)> for TePlane<U> {
     }
 }
 
-impl<E: Event> From<TePlane<E>> for Notes<Tick, Vec<E>> {
-    fn from(plane: TePlane<E>) -> Self {
-        let by_tick = plane.into_points().into_group_map();
+impl<E: Event> TePlane<E> {
+    /// Collects the plane into notes keyed by tick, with tones sorted.
+    pub fn into_notes(self) -> Notes<Tick, Vec<E>> {
+        let by_tick = self.into_points().into_group_map();
         let notes = by_tick.into_iter().map(|(tick, mut tones)| {
             tones.sort_unstable();
             (tick, tones)

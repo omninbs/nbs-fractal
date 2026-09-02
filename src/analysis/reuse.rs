@@ -20,7 +20,7 @@
 //!   approximation at the hardness boundary.
 
 use crate::analysis::{BoundedTec, Event, Point, TePlane, TransEqClass};
-use crate::types::Tick;
+use rsnbs::types::Tick;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZero;
@@ -363,7 +363,7 @@ pub fn plan_to_tecs<E: Event>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::note::{Instrument, Key, Tone};
+    use rsnbs::note::{Instrument, Key, Tone};
 
     fn tone() -> Tone {
         Tone::new(Instrument::Harp, Key::FS3)

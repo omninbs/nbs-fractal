@@ -2,8 +2,9 @@
 
 use super::{Arranged, Axis, Layout, chain_block, inst_block};
 use super::{Facing, air, note_block, redstone_wire, repeater};
-use crate::note::{Notes, Tone};
-use crate::types::{GameTick, RedStoneTick, Tick};
+use crate::{GameTick, RedStoneTick};
+use rsnbs::note::{Notes, Tone};
+use rsnbs::types::Tick;
 use mcdata::{GenericBlockState, util::BlockPos};
 use std::iter;
 use std::num::NonZero;

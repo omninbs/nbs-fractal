@@ -3,10 +3,10 @@
 use super::{EvenlyArranged, Facing, Layout};
 use super::{WithFloor, air, chain_block, inst_block, note_block};
 use super::{redstone_block, repeater, sticky_piston};
-use crate::note::Tone;
 use crate::schematic::{WireConn, wire_state};
-use crate::types::{Tick, TimeAnchor};
 use mcdata::{GenericBlockState, util::BlockPos};
+use rsnbs::note::Tone;
+use rsnbs::types::{Tick, TimeAnchor};
 use std::num::NonZero;
 use std::vec::IntoIter as VecIter;
 
