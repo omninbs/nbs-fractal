@@ -3,6 +3,7 @@ name = "nbs-fractal"
 version = "0.1.0"
 authors = ["kemiamu <kemya@tuta.io>"]
 edition = "2024"
+repository = "https://github.com/omninbs/nbs-fractal"
 description = "Experimental repetition-pattern reconstruction of OpenNBS .nbs songs"
 license = "AGPL-3.0-or-later"
 readme = "README.md"
