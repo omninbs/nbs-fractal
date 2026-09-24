@@ -193,7 +193,7 @@ impl LinearLayout {
             let lane = (0..cells.len()).step_by(row_length).map(|start| {
                 let index = start / row_length;
                 let region = cells.window(start, row_length);
-                Row::new(region, scale, width, index > 0, index % 2 == 0)
+                Row::new(region, scale, width, index > 0, index % 2 == 0, row_length)
             });
             lanes.push(lane.collect());
         }
@@ -229,18 +229,24 @@ impl Row {
         width: i32,
         leading_turn: bool,
         south_bound: bool,
+        row_length: usize,
     ) -> Self {
         let templates: Vec<Template> = cells
             .iter_mut()
             .map(|cell| Template::new(cell, scale, south_bound))
             .collect();
-        let depth = 2 * templates.len() as i32 + 2;
+        // every row spans the full `row_length`
+        let depth = 2 * row_length as i32 + 2;
         let pitch = BlockPos::new(0, 0, if south_bound { 2 } else { -2 });
         let cells = EvenlyArranged::new(templates, pitch);
         let turn = Turn::new(width, south_bound, leading_turn);
         let size = BlockPos::new(width, cells.size().y, depth);
         let turn_anchor = BlockPos::new(0, 0, if south_bound { 0 } else { depth - 1 });
-        let cells_anchor = BlockPos::new(width - scale.width(), 0, i32::from(south_bound));
+        let cells_z = match south_bound {
+            true => 1,
+            false => depth - 1 - cells.size().z,
+        };
+        let cells_anchor = BlockPos::new(width - scale.width(), 0, cells_z);
         Self(Overlap::new(
             (turn_anchor, turn),
             (cells_anchor, cells),
