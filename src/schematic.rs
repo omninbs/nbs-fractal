@@ -168,22 +168,20 @@ impl<L: Layout> Layout for Arranged<L> {
 /// Query cost is O(k) with `k` the candidate window width, independent of
 /// the item count. `pitch` must be non-zero.
 pub struct EvenlyArranged<L: Layout> {
-    /// Sub-layouts in lattice order; item `i` is anchored at `i * pitch`.
+    /// Sub-layouts in lattice order; item `i` sits at `i * pitch`.
     items: Vec<L>,
-    /// Non-zero step between successive item anchors.
+    /// Non-zero step between item anchors.
     pitch: BlockPos,
-    /// Component-wise maximum of all item sizes.
-    extent: BlockPos,
-    /// Shift applied to a world position so item indices can go negative;
-    /// equals `min(pitch, 0) * (items.len() - 1)`.
+    /// Shift so indices can go negative: `min(pitch, 0) * (len - 1)`.
     anchor: BlockPos,
-    /// `pitch.dot(pitch)`, the squared lattice spacing; always positive.
+    /// `pitch.dot(pitch)`, always positive.
     spacing: i32,
     /// Lower bound of `pitch.dot(local_pos - i * pitch)` over one item box.
-    lo: i32,
-    /// One less than the candidate window width: `top - span` is a safe lower
-    /// bound on the first candidate index (may over-scan by one).
+    bias: i32,
+    /// Candidate window width minus one.
     span: i32,
+    /// Bounding box size: `pitch.abs() * (len - 1) + extent`.
+    size: BlockPos,
 }
 
 impl<L: Layout> EvenlyArranged<L> {
@@ -196,10 +194,11 @@ impl<L: Layout> EvenlyArranged<L> {
             .fold(BlockPos::ORIGIN, include);
 
         let spacing = pitch.dot(pitch);
-        let hi = include(pitch, BlockPos::ORIGIN).dot(extent);
-        let lo = pitch.dot(extent) - hi;
+        let peak = include(pitch, BlockPos::ORIGIN).dot(extent);
+        let bias = pitch.dot(extent) - peak;
         let span = pitch.abs().dot(extent) / spacing;
         let far = items.len() as i32 - 1;
+        let size = pitch.abs() * far + extent;
 
         let anchor = BlockPos::new(
             pitch.x.min(0) * far,
@@ -209,11 +208,11 @@ impl<L: Layout> EvenlyArranged<L> {
         Self {
             items,
             pitch,
-            extent,
             anchor,
             spacing,
-            lo,
+            bias,
             span,
+            size,
         }
     }
 }
@@ -222,19 +221,15 @@ impl<L: Layout> Layout for EvenlyArranged<L> {
     fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
         let local_pos = pos + self.anchor;
         let offset = self.pitch.dot(local_pos);
-        let top = ((offset - self.lo).div_euclid(self.spacing)).min(self.items.len() as i32 - 1);
+        let top = ((offset - self.bias).div_euclid(self.spacing)).min(self.items.len() as i32 - 1);
         let bottom = (top - self.span).max(0);
-        let mut cursor = local_pos - self.pitch * top;
-        let mut window = self.items.get(bottom as usize..=top as usize)?.iter().rev();
-        window.find_map(|item| {
-            let block = item.try_get_block(cursor);
-            cursor = cursor + self.pitch;
-            block
-        })
+        (bottom..=top)
+            .rev()
+            .find_map(|i| self.items[i as usize].try_get_block(local_pos - self.pitch * i))
     }
 
     fn size(&self) -> BlockPos {
-        self.pitch.abs() * (self.items.len() as i32 - 1) + self.extent
+        self.size
     }
 }
 
