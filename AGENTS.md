@@ -14,9 +14,10 @@ Example: `fix: keep wrapped linear rows one fixed size`
 
 | Branch | Purpose |
 | --- | --- |
-| `dev` | Daily development branch, committed to frequently. |
+| `dev` | Local-only development branch, committed to frequently; never pushed to a remote. |
 | `main` | Stable branch, kept generally usable. |
 
 - All development commits go to `dev` by default.
-- Merging into `main` and pushing must be explicitly commanded by the user.
+- A `push` request means: merge `dev` into `main`, then push `main`.
+- After every merge into `main`, recreate `dev` fresh from `main`.
 - Merging branches must follow the format `merge: <description>`
