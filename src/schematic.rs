@@ -168,11 +168,22 @@ impl<L: Layout> Layout for Arranged<L> {
 /// Query cost is O(k) with `k` the candidate window width, independent of
 /// the item count. `pitch` must be non-zero.
 pub struct EvenlyArranged<L: Layout> {
+    /// Sub-layouts in lattice order; item `i` is anchored at `i * pitch`.
     items: Vec<L>,
+    /// Non-zero step between successive item anchors.
     pitch: BlockPos,
+    /// Component-wise maximum of all item sizes.
     extent: BlockPos,
+    /// Shift applied to a world position so item indices can go negative;
+    /// equals `min(pitch, 0) * (items.len() - 1)`.
     anchor: BlockPos,
-    window: (i32, i32, i32),
+    /// `pitch.dot(pitch)`, the squared lattice spacing; always positive.
+    spacing: i32,
+    /// Lower bound of `pitch.dot(local_pos - i * pitch)` over one item box.
+    lo: i32,
+    /// One less than the candidate window width: `top - span` is a safe lower
+    /// bound on the first candidate index (may over-scan by one).
+    span: i32,
 }
 
 impl<L: Layout> EvenlyArranged<L> {
@@ -187,6 +198,7 @@ impl<L: Layout> EvenlyArranged<L> {
         let spacing = pitch.dot(pitch);
         let hi = include(pitch, BlockPos::ORIGIN).dot(extent);
         let lo = pitch.dot(extent) - hi;
+        let span = pitch.abs().dot(extent) / spacing;
         let far = items.len() as i32 - 1;
 
         let anchor = BlockPos::new(
@@ -199,7 +211,9 @@ impl<L: Layout> EvenlyArranged<L> {
             pitch,
             extent,
             anchor,
-            window: (spacing, lo, hi),
+            spacing,
+            lo,
+            span,
         }
     }
 }
@@ -207,12 +221,15 @@ impl<L: Layout> EvenlyArranged<L> {
 impl<L: Layout> Layout for EvenlyArranged<L> {
     fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
         let local_pos = pos + self.anchor;
-        let (spacing, lo, hi) = self.window;
         let offset = self.pitch.dot(local_pos);
-        let top = ((offset - lo).div_euclid(spacing)).min(self.items.len() as i32 - 1);
-        let bottom = (-(hi - offset).div_euclid(spacing)).max(0);
-        (bottom..=top).rev().find_map(|index| {
-            self.items[index as usize].try_get_block(local_pos - self.pitch * index)
+        let top = ((offset - self.lo).div_euclid(self.spacing)).min(self.items.len() as i32 - 1);
+        let bottom = (top - self.span).max(0);
+        let mut cursor = local_pos - self.pitch * top;
+        let mut window = self.items.get(bottom as usize..=top as usize)?.iter().rev();
+        window.find_map(|item| {
+            let block = item.try_get_block(cursor);
+            cursor = cursor + self.pitch;
+            block
         })
     }
 
@@ -511,3 +528,4 @@ fn floor_block() -> GenericBlockState {
         properties: Default::default(),
     }
 }
+
