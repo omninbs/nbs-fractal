@@ -255,10 +255,7 @@ pub struct Anchored {
 impl Anchored {
     /// Build from initial entries; [`Self::push`] appends more later.
     pub fn new(entries: impl IntoIterator<Item = (Box<dyn Layout>, BlockPos)>) -> Self {
-        let mut anchored = Self {
-            entries: Vec::new(),
-            size: BlockPos::ORIGIN,
-        };
+        let mut anchored = Self::default();
         for (layout, anchor) in entries {
             anchored.push(layout, anchor);
         }
@@ -282,6 +279,15 @@ impl Layout for Anchored {
 
     fn size(&self) -> BlockPos {
         self.size
+    }
+}
+
+impl Default for Anchored {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            size: BlockPos::ORIGIN,
+        }
     }
 }
 
@@ -528,4 +534,3 @@ fn floor_block() -> GenericBlockState {
         properties: Default::default(),
     }
 }
-
