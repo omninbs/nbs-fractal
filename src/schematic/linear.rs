@@ -29,9 +29,10 @@ impl MultiLinearLayout {
         for<'a> &'a Trk: IntoIterator<Item = (&'a A, &'a T)>,
     {
         let scale = ScaleMode::from_tracks(&tracks);
-        let layouts = tracks
-            .into_iter()
-            .flat_map(|notes| LinearLayout::new(notes, scale, song_length, None, 0));
+        let layouts = tracks.into_iter().flat_map(|notes| {
+            let cells = Cells::new(notes, scale, song_length);
+            LinearLayout::new(cells, scale, None, 0)
+        });
         let pitch = BlockPos::new(scale.width() + gap as i32, 0, 0);
         Self(EvenlyArranged::new(layouts, pitch))
     }
@@ -73,9 +74,9 @@ impl StackedLinearLayout {
     {
         let scale = ScaleMode::from_tracks(&tracks);
         let layouts = tracks.into_iter().flat_map(|notes| {
-            LinearLayout::new(notes, scale, song_length, wrap_length, gap)
-                .into_iter()
-                .map(|layout| WithFloor::new(layout, full))
+            let cells = Cells::new(notes, scale, song_length);
+            let layer = LinearLayout::new(cells, scale, wrap_length, gap);
+            layer.into_iter().map(|layout| WithFloor::new(layout, full))
         });
         let pitch = BlockPos::new(0, 4, 0);
         Self(EvenlyArranged::new(layouts, pitch))
@@ -100,23 +101,13 @@ impl Layout for StackedLinearLayout {
 pub struct LinearLayout(EvenlyArranged<Row>);
 
 impl LinearLayout {
-    /// Builds lanes from one track's note events via the cell container.
-    pub fn new<Trk, A, T>(
-        notes: Trk,
+    /// Lays a pre-filed cell container out into lanes.
+    pub(crate) fn new(
+        mut cells: Cells,
         scale: ScaleMode,
-        song_length: Tick,
         wrap_length: Option<NonZero<Tick>>,
         gap: u32,
-    ) -> Vec<Self>
-    where
-        Trk: IntoIterator<Item = (A, T)>,
-        A: TimeAnchor,
-        T: Into<Tone>,
-    {
-        let min_cells = song_length
-            .checked_sub(1)
-            .map_or(0, |tick| scale.cell_slot(tick).0 + 1);
-        let mut cells = Cells::new(notes, scale, min_cells);
+    ) -> Vec<Self> {
         let width = scale.width() + gap as i32 + 1;
         let row_length = wrap_length.map_or(cells.len(), |w| w.get() as usize);
 
@@ -157,14 +148,17 @@ pub(crate) struct Cells {
 }
 
 impl Cells {
-    /// Files notes into their cells; `min` keeps silent cells inside the
-    /// song length alive.
-    fn new<Trk, A, T>(notes: Trk, scale: ScaleMode, min: usize) -> Self
+    /// Files notes into their cells, keeping every cell up to `song_length`
+    /// alive even when silent.
+    fn new<Trk, A, T>(notes: Trk, scale: ScaleMode, song_length: Tick) -> Self
     where
         Trk: IntoIterator<Item = (A, T)>,
         A: TimeAnchor,
         T: Into<Tone>,
     {
+        let min = song_length
+            .checked_sub(1)
+            .map_or(0, |tick| scale.cell_slot(tick).0 + 1);
         let mut slots: Vec<(Vec<Tone>, Vec<Tone>)> = vec![Default::default(); min];
         for (anchor, note) in notes {
             let (cell, is_branch) = scale.cell_slot(anchor.into_tick());
@@ -227,7 +221,7 @@ impl Cell {
 /// One directional row of template cells.
 struct Row {
     cells: EvenlyArranged<Template>,
-    leading_turn: bool,
+    turn: Option<Turn>,
     south_bound: bool,
     size: BlockPos,
 }
@@ -248,10 +242,11 @@ impl Row {
         let depth = 2 * templates.len() as i32 + 2;
         let pitch = BlockPos::new(0, 0, if south_bound { 2 } else { -2 });
         let cells = EvenlyArranged::new(templates, pitch);
+        let turn = leading_turn.then(|| Turn::new(width, south_bound));
         let size = BlockPos::new(width, cells.size().y, depth);
         Self {
             cells,
-            leading_turn,
+            turn,
             south_bound,
             size,
         }
@@ -260,22 +255,16 @@ impl Row {
 
 impl Layout for Row {
     fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
-        use self::WireConn::*;
+        let turn_z = if self.south_bound { 0 } else { self.size.z - 1 };
+        if let Some(turn) = self.turn.as_ref().filter(|_| pos.z == turn_z) {
+            return turn.block_at(BlockPos::new(pos.x, pos.y, 0));
+        }
         let inner = self.cells.size();
         let offset = match self.south_bound {
             true => BlockPos::new(inner.x - self.size.x, 0, -1),
             false => BlockPos::new(inner.x - self.size.x, 0, self.size.z - 1 - inner.z),
         };
-        let turn_z = if self.south_bound { 0 } else { self.size.z - 1 };
-        let turning = self.leading_turn && pos.z == turn_z;
-        match (turning, pos.y, self.size.x - pos.x, self.south_bound) {
-            (true, 1, 2, true) => Some(wire_state(Side, None, None, Side, "0")),
-            (true, 1, 2, false) => Some(wire_state(Side, None, Side, None, "0")),
-            (true, 1, 2.., _) => Some(wire_state(Side, Side, None, None, "0")),
-            (true, 0, 2.., _) => Some(chain_block()),
-            (true, _, _, _) => Option::None,
-            (false, _, _, _) => self.cells.try_get_block(pos + offset),
-        }
+        self.cells.try_get_block(pos + offset)
     }
 
     fn size(&self) -> BlockPos {
@@ -377,6 +366,39 @@ impl Layout for Template {
 
     fn size(&self) -> BlockPos {
         BlockPos::new(self.scale.width(), 2, 3)
+    }
+}
+
+/// The connector turn at a row's far x-end, spanning a single z layer.
+///
+/// A leaf layout built from the row width and orientation alone, independent
+/// of the surrounding row and cell arrangement.
+struct Turn {
+    width: i32,
+    south_bound: bool,
+}
+
+impl Turn {
+    /// A turn `width` blocks wide, facing the row's travel direction.
+    fn new(width: i32, south_bound: bool) -> Self {
+        Self { width, south_bound }
+    }
+}
+
+impl Layout for Turn {
+    fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
+        use self::WireConn::*;
+        match (pos.y, self.width - 1 - pos.x, self.south_bound) {
+            (1, 1, true) => Some(wire_state(Side, None, None, Side, "0")),
+            (1, 1, false) => Some(wire_state(Side, None, Side, None, "0")),
+            (1, 2.., _) => Some(wire_state(Side, Side, None, None, "0")),
+            (0, 1.., _) => Some(chain_block()),
+            _ => Option::None,
+        }
+    }
+
+    fn size(&self) -> BlockPos {
+        BlockPos::new(self.width, 2, 1)
     }
 }
 

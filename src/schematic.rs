@@ -295,17 +295,37 @@ impl Default for Anchored {
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-/// Overlaps two positioned sub-layouts.
-impl<A: Layout, B: Layout> Layout for (BlockPos, A, BlockPos, B) {
+/// Overlaps two positioned sub-layouts; the first wins where they coincide.
+///
+/// The combined size is supplied at construction, keeping [`Layout::block_at`]
+/// free of per-query size arithmetic.
+pub struct Overlap<A: Layout, B: Layout> {
+    first: (BlockPos, A),
+    second: (BlockPos, B),
+    size: BlockPos,
+}
+
+impl<A: Layout, B: Layout> Overlap<A, B> {
+    pub fn new(first: (BlockPos, A), second: (BlockPos, B), size: BlockPos) -> Self {
+        Self {
+            first,
+            second,
+            size,
+        }
+    }
+}
+
+impl<A: Layout, B: Layout> Layout for Overlap<A, B> {
     fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
-        let (first_anchor, first, second_anchor, second) = self;
-        let upper = first.try_get_block(pos - *first_anchor);
-        upper.or_else(|| second.try_get_block(pos - *second_anchor))
+        let (anchor, layout) = &self.first;
+        layout.try_get_block(pos - *anchor).or_else(|| {
+            let (anchor, layout) = &self.second;
+            layout.try_get_block(pos - *anchor)
+        })
     }
 
     fn size(&self) -> BlockPos {
-        let (first_anchor, first, second_anchor, second) = self;
-        include(*first_anchor + first.size(), *second_anchor + second.size())
+        self.size
     }
 }
 
