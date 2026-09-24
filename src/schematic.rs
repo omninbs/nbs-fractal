@@ -291,7 +291,7 @@ impl Default for Anchored {
     }
 }
 
-// Overlap
+// Overlaid
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
@@ -299,23 +299,29 @@ impl Default for Anchored {
 ///
 /// The combined size is supplied at construction, keeping [`Layout::block_at`]
 /// free of per-query size arithmetic.
-pub struct Overlap<A: Layout, B: Layout> {
+pub struct Overlaid<A: Layout, B: Layout> {
     first: (BlockPos, A),
     second: (BlockPos, B),
     size: BlockPos,
 }
 
-impl<A: Layout, B: Layout> Overlap<A, B> {
-    pub fn new(first: (BlockPos, A), second: (BlockPos, B), size: BlockPos) -> Self {
+impl<A: Layout, B: Layout> Overlaid<A, B> {
+    pub fn new(
+        first_anchor: BlockPos,
+        first: A,
+        second_anchor: BlockPos,
+        second: B,
+        size: BlockPos,
+    ) -> Self {
         Self {
-            first,
-            second,
+            first: (first_anchor, first),
+            second: (second_anchor, second),
             size,
         }
     }
 }
 
-impl<A: Layout, B: Layout> Layout for Overlap<A, B> {
+impl<A: Layout, B: Layout> Layout for Overlaid<A, B> {
     fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
         let (anchor, layout) = &self.first;
         layout.try_get_block(pos - *anchor).or_else(|| {

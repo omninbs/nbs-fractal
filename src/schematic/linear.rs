@@ -1,6 +1,6 @@
 //! Linear time-proportional layout for NBS song projection.
 
-use super::{EvenlyArranged, Facing, Layout, Overlap};
+use super::{EvenlyArranged, Facing, Layout, Overlaid};
 use super::{WithFloor, air, chain_block, inst_block, note_block};
 use super::{redstone_block, repeater, sticky_piston};
 use crate::schematic::{WireConn, wire_state};
@@ -219,7 +219,7 @@ impl Layout for LinearLayout {
 // ++++++++++++============++++++++++++============++++++++++++============
 
 /// One directional row of template cells.
-struct Row(Overlap<Turn, EvenlyArranged<Template>>);
+struct Row(Overlaid<Turn, EvenlyArranged<Template>>);
 
 impl Row {
     /// Arranges its region of cells in the row direction, draining them.
@@ -247,11 +247,7 @@ impl Row {
             false => depth - 1 - cells.size().z,
         };
         let cells_anchor = BlockPos::new(width - scale.width(), 0, cells_z);
-        Self(Overlap::new(
-            (turn_anchor, turn),
-            (cells_anchor, cells),
-            size,
-        ))
+        Self(Overlaid::new(turn_anchor, turn, cells_anchor, cells, size))
     }
 }
 
