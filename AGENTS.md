@@ -19,3 +19,4 @@ Example: `fix: keep wrapped linear rows one fixed size`
 
 - All development commits go to `dev` by default.
 - Merging into `main` and pushing must be explicitly commanded by the user.
+- Merging branches must follow the format `merge: <description>`
