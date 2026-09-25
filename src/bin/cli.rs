@@ -55,12 +55,12 @@ struct Compact {
     /// Repeater delay coarseness 1-4 (0 = unlimited)
     #[arg(short, long, default_value_t = 0)]
     coarse: u32,
-    /// Block spacing between adjacent tracks
+    /// Block spacing between adjacent rows (0 = interlocked)
     #[arg(short, long, default_value_t = 0)]
     gap: u32,
-    /// Floor platform mode
-    #[arg(short, long, value_enum, default_value_t)]
-    floor: Floor,
+    /// Add a full floor platform below the build
+    #[arg(short, long)]
+    full_floor: bool,
 }
 
 impl Compact {
@@ -74,9 +74,10 @@ impl Compact {
         }
 
         let tracks = std::iter::once((by_tick, NonZero::new(self.coarse)));
-        let layout = MultiCompactLayout::new(tracks, NonZero::new(self.wrap), self.gap);
+        let layout =
+            MultiCompactLayout::new(tracks, NonZero::new(self.wrap), self.gap, self.full_floor);
         let description = format!("Sectional from {}", self.input);
-        let litematic = build_schematic(layout, self.floor, description);
+        let litematic = build_schematic(layout, Floor::None, description);
         write_output(&self.output, litematic);
     }
 }

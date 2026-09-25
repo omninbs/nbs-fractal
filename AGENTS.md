@@ -14,7 +14,7 @@ Example: `fix: keep wrapped linear rows one fixed size`
 
 | Branch | Purpose |
 | --- | --- |
-| `dev` | Local-only development branch, committed to frequently; never pushed to a remote. |
+| `dev` | Local-only development branch; never pushed to a remote. |
 | `main` | Stable branch, kept generally usable. |
 
 - All development commits go to `dev` by default.
