@@ -10,7 +10,7 @@ use rsnbs::types::{Tick, TimeAnchor};
 use std::num::NonZero;
 use std::vec::IntoIter as VecIter;
 
-// MultiLinearLayout
+// Shell: MultiLinearLayout & StackedLinearLayout
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
@@ -47,10 +47,6 @@ impl Layout for MultiLinearLayout {
         self.0.size()
     }
 }
-
-// StackedLinearLayout
-//
-// ++++++++++++============++++++++++++============++++++++++++============
 
 /// Multi-track linear layout stacked vertically, each with a floor platform below.
 pub struct StackedLinearLayout(EvenlyArranged<WithFloor<LinearLayout>>);
@@ -93,7 +89,10 @@ impl Layout for StackedLinearLayout {
     }
 }
 
-// Cells
+// Data containers: Cells & ScaleMode
+//
+// Data containers are a parallel layer to the structural layout, declaring a
+// data container suitable for consumption by the structural layout.
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
@@ -170,7 +169,77 @@ impl Cell {
     }
 }
 
-// LinearLayout
+/// Time scale used by linear cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScaleMode {
+    Scale4,
+    Scale2,
+    Scale3,
+    Scale1,
+}
+
+impl ScaleMode {
+    const SCALE_MODES: [Tick; 3] = [4, 3, 2];
+
+    /// Selects the coarsest scale compatible with every event timestamp.
+    pub fn from_tracks<'a, Trks, Trk: 'a, A: 'a, T: 'a>(tracks: &'a Trks) -> Self
+    where
+        &'a Trks: IntoIterator<Item = &'a Trk>,
+        &'a Trk: IntoIterator<Item = (&'a A, &'a T)>,
+        A: TimeAnchor,
+    {
+        let ticks = tracks
+            .into_iter()
+            .flat_map(|track| track.into_iter().map(|(anchor, _)| (*anchor).into_tick()));
+        Self::new(ticks)
+    }
+
+    /// Selects the coarsest scale compatible with all timestamps.
+    ///
+    /// The fallback is [`ScaleMode::Scale1`].
+    pub fn new<I: IntoIterator<Item = Tick>>(ticks: I) -> Self {
+        let applicable = ticks.into_iter().fold([true; 3], |applicable, tick| {
+            let divisible = Self::SCALE_MODES.map(|scale| tick % scale == 0);
+            std::array::from_fn(|index| applicable[index] && divisible[index])
+        });
+        match applicable.iter().position(|&is_applicable| is_applicable) {
+            Some(0) => Self::Scale4,
+            Some(1) => Self::Scale3,
+            Some(2) => Self::Scale2,
+            _ => Self::Scale1,
+        }
+    }
+
+    /// Returns the scale in game ticks.
+    pub const fn scale(self) -> Tick {
+        match self {
+            Self::Scale4 => 4,
+            Self::Scale2 => 2,
+            Self::Scale3 => 3,
+            Self::Scale1 => 1,
+        }
+    }
+
+    /// Returns the cell width in blocks.
+    pub const fn width(self) -> i32 {
+        match self {
+            Self::Scale4 | Self::Scale2 => 5,
+            Self::Scale3 | Self::Scale1 => 6,
+        }
+    }
+
+    pub fn cell_slot(self, tick: Tick) -> (usize, bool) {
+        let tick = tick / self.scale();
+        let branch = tick % 2 == 1;
+        let cell = tick as usize / 2 + usize::from(self == Self::Scale1 && !branch);
+        (cell, branch)
+    }
+}
+
+// Structural layout: LinearLayout & Row
+//
+// The structural layout layer is the hierarchy that generates and organizes
+// layouts; it produces no blocks itself and only performs layout.
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
@@ -213,10 +282,6 @@ impl Layout for LinearLayout {
         self.0.size()
     }
 }
-
-// Row & Turn
-//
-// ++++++++++++============++++++++++++============++++++++++++============
 
 /// One directional row of template cells.
 struct Row(Overlaid<Turn, EvenlyArranged<Template>>);
@@ -261,7 +326,10 @@ impl Layout for Row {
     }
 }
 
-// Template
+// Templates: Template & Turn
+//
+// The template layer only produces placeable structures; it does not depend on
+// any layout structure and can be fully constructed on its own.
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
@@ -397,76 +465,5 @@ impl Layout for Turn {
 
     fn size(&self) -> BlockPos {
         BlockPos::new(self.width, 2, 1)
-    }
-}
-
-// ScaleMode
-//
-// ++++++++++++============++++++++++++============++++++++++++============
-
-/// Time scale used by linear cells.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScaleMode {
-    Scale4,
-    Scale2,
-    Scale3,
-    Scale1,
-}
-
-impl ScaleMode {
-    const SCALE_MODES: [Tick; 3] = [4, 3, 2];
-
-    /// Selects the coarsest scale compatible with every event timestamp.
-    pub fn from_tracks<'a, Trks, Trk: 'a, A: 'a, T: 'a>(tracks: &'a Trks) -> Self
-    where
-        &'a Trks: IntoIterator<Item = &'a Trk>,
-        &'a Trk: IntoIterator<Item = (&'a A, &'a T)>,
-        A: TimeAnchor,
-    {
-        let ticks = tracks
-            .into_iter()
-            .flat_map(|track| track.into_iter().map(|(anchor, _)| (*anchor).into_tick()));
-        Self::new(ticks)
-    }
-
-    /// Selects the coarsest scale compatible with all timestamps.
-    ///
-    /// The fallback is [`ScaleMode::Scale1`].
-    pub fn new<I: IntoIterator<Item = Tick>>(ticks: I) -> Self {
-        let applicable = ticks.into_iter().fold([true; 3], |applicable, tick| {
-            let divisible = Self::SCALE_MODES.map(|scale| tick % scale == 0);
-            std::array::from_fn(|index| applicable[index] && divisible[index])
-        });
-        match applicable.iter().position(|&is_applicable| is_applicable) {
-            Some(0) => Self::Scale4,
-            Some(1) => Self::Scale3,
-            Some(2) => Self::Scale2,
-            _ => Self::Scale1,
-        }
-    }
-
-    /// Returns the scale in game ticks.
-    pub const fn scale(self) -> Tick {
-        match self {
-            Self::Scale4 => 4,
-            Self::Scale2 => 2,
-            Self::Scale3 => 3,
-            Self::Scale1 => 1,
-        }
-    }
-
-    /// Returns the cell width in blocks.
-    pub const fn width(self) -> i32 {
-        match self {
-            Self::Scale4 | Self::Scale2 => 5,
-            Self::Scale3 | Self::Scale1 => 6,
-        }
-    }
-
-    pub fn cell_slot(self, tick: Tick) -> (usize, bool) {
-        let tick = tick / self.scale();
-        let branch = tick % 2 == 1;
-        let cell = tick as usize / 2 + usize::from(self == Self::Scale1 && !branch);
-        (cell, branch)
     }
 }
