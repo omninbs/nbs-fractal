@@ -325,10 +325,6 @@ enum Branch {
 
 impl Template {
     /// Takes one cell out of the region.
-    ///
-    /// Pulls at most two main-line notes, and a third one only when no
-    /// branch-line note exists. Notes the slots cannot hold stay in the cell,
-    /// where the next lane's template picks them up.
     fn new(cell: &mut Cell, scale: ScaleMode, south_bound: bool) -> Self {
         let main_notes = &mut cell.main;
         let branch_notes = &mut cell.branch;
