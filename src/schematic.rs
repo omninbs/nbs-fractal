@@ -67,6 +67,16 @@ pub trait Layout {
     }
 }
 
+impl Layout for () {
+    fn block_at(&self, _pos: BlockPos) -> Option<GenericBlockState> {
+        None
+    }
+
+    fn size(&self) -> BlockPos {
+        BlockPos::ORIGIN
+    }
+}
+
 impl Layout for Box<dyn Layout + '_> {
     fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
         self.as_ref().block_at(pos)
