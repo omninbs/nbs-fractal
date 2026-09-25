@@ -231,18 +231,6 @@ pub(crate) struct Cell {
     branch: VecIter<Tone>,
 }
 
-impl Cell {
-    /// Takes up to `cap` main notes out of the cell.
-    fn take_main(&mut self, cap: usize) -> Vec<Tone> {
-        self.main.by_ref().take(cap).collect()
-    }
-
-    /// Takes up to `cap` branch notes out of the cell.
-    fn take_branch(&mut self, cap: usize) -> Vec<Tone> {
-        self.branch.by_ref().take(cap).collect()
-    }
-}
-
 /// Time scale used by linear cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScaleMode {
@@ -338,22 +326,12 @@ enum Branch {
 impl Template {
     /// Takes one cell out of the region.
     ///
-    /// Consumes up to three main and two branch notes; notes beyond the
-    /// capacity stay in the cell, where the next lane's template picks
-    /// them up.
+    /// Pulls at most two main-line notes, and a third one only when no
+    /// branch-line note exists. Notes the slots cannot hold stay in the cell,
+    /// where the next lane's template picks them up.
     fn new(cell: &mut Cell, scale: ScaleMode, south_bound: bool) -> Self {
-        let main = cell.take_main(3);
-        let branch = cell.take_branch(2);
-        Self::from_notes(scale, main, branch, south_bound)
-    }
-
-    /// Builds a cell from raw notes; `None` slots stay silent.
-    fn from_notes<M, B>(scale: ScaleMode, main: M, branch: B, south_bound: bool) -> Self
-    where
-        M: IntoIterator<Item = Tone>,
-        B: IntoIterator<Item = Tone>,
-    {
-        let (mut main_notes, mut branch_notes) = (main.into_iter(), branch.into_iter());
+        let main_notes = &mut cell.main;
+        let branch_notes = &mut cell.branch;
         let main = [main_notes.next(), main_notes.next()];
         let branch = match branch_notes.next() {
             Some(first) => Branch::Branched([Some(first), branch_notes.next()]),
