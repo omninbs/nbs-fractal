@@ -1,8 +1,9 @@
 //! Compact note block layouts for NBS song projection.
 
-use super::{AsLayout, EvenlyArranged, Layout, WithFloor};
+use super::{AsLayout, EvenlyArranged, Facing, Layout, WithFloor};
+use super::{air, chain_block, inst_block, note_block, redstone_wire, repeater};
 use crate::{GameTick, RedStoneTick};
-use mcdata::util::BlockPos;
+use mcdata::{GenericBlockState, util::BlockPos};
 use rsnbs::note::{Notes, Tone};
 use rsnbs::types::Tick;
 use std::num::NonZero;
@@ -105,21 +106,22 @@ impl AsLayout for CompactLayout {
 #[derive(Clone, Copy)]
 enum Tile {
     Hold {
-        delay: RedStoneTick,
+        stem: RedStoneTick,
+        cap: RedStoneTick,
         south_bound: bool,
     },
     Sink {
-        delay: RedStoneTick,
-        notes: [Option<Tone>; 3],
+        stem: RedStoneTick,
+        cap: [Option<Tone>; 3],
         south_bound: bool,
     },
     Node {
-        notes: [Option<Tone>; 2],
+        cap: [Option<Tone>; 2],
         south_bound: bool,
     },
     Port {
-        delay: RedStoneTick,
-        notes: [Option<Tone>; 2],
+        stem: RedStoneTick,
+        cap: [Option<Tone>; 2],
         south_bound: bool,
     },
 }
@@ -128,11 +130,55 @@ enum Tile {
 enum Turn {
     Sink {
         width: i32,
-        handle: RedStoneTick,
-        notes: [Option<Tone>; 2],
+        stem: RedStoneTick,
+        cap: [Option<Tone>; 2],
     },
     Node {
         width: i32,
-        note: Option<Tone>,
+        cap: Option<Tone>,
     },
+}
+
+impl Turn {
+    fn width(&self) -> i32 {
+        match *self {
+            Turn::Sink { width, .. } | Turn::Node { width, .. } => width,
+        }
+    }
+
+    fn stem(&self) -> RedStoneTick {
+        match *self {
+            Turn::Sink { stem, .. } => stem,
+            Turn::Node { .. } => 0,
+        }
+    }
+}
+
+impl Layout for Turn {
+    fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
+        use self::{Facing::*, Turn::*};
+        let local_x = self.width() - 1 - pos.x;
+        let repeater = || repeater(self.stem().to_string(), East, false, false);
+        match (*self, local_x, pos.y) {
+            (_, 2, 1) if self.stem() > 0 => Some(repeater()),
+            (_, 2.., 0) => Some(chain_block()),
+            (_, 2.., 1) => Some(redstone_wire()),
+
+            (Sink { cap, .. }, 1, 0) => Some(inst_block(cap[0], chain_block)),
+            (Sink { cap, .. }, 1, 1) => Some(note_block(cap[0], chain_block)),
+            (Sink { cap, .. }, 0, 0) => Some(inst_block(cap[1], air)),
+            (Sink { cap, .. }, 0, 1) => Some(note_block(cap[1], air)),
+
+            (Node { .. }, 1, 0 | 1) => Some(chain_block()),
+            (Node { .. }, 1, 2) => Some(redstone_wire()),
+            (Node { cap, .. }, 0, 0) => Some(inst_block(cap, air)),
+            (Node { cap, .. }, 0, 1) => Some(note_block(cap, air)),
+
+            _ => None,
+        }
+    }
+
+    fn size(&self) -> BlockPos {
+        BlockPos::new(self.width(), 3, 1)
+    }
 }
