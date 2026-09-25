@@ -81,6 +81,88 @@ impl AsLayout for StackedLinearLayout {
     }
 }
 
+// Structural layout: LinearLayout & Row
+//
+// The structural layout layer is the hierarchy that generates and organizes
+// layouts; it produces no blocks itself and only performs layout.
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+/// A zigzag linear layout for one track.
+pub struct LinearLayout(EvenlyArranged<Row>);
+
+impl LinearLayout {
+    /// Lays a pre-filed cell container out into lanes.
+    pub(crate) fn new(
+        mut cells: Cells,
+        scale: ScaleMode,
+        wrap_length: Option<NonZero<Tick>>,
+        gap: u32,
+    ) -> Vec<Self> {
+        let width = scale.width() + gap as i32 + 1;
+        let row_length = wrap_length.map_or(cells.len(), |w| w.get() as usize);
+
+        let mut lanes: Vec<Vec<Row>> = Vec::new();
+        while cells.has_notes() {
+            let lane = (0..cells.len()).step_by(row_length).map(|start| {
+                let index = start / row_length;
+                let region = cells.window(start, row_length);
+                Row::new(region, scale, width, index > 0, index % 2 == 0, row_length)
+            });
+            lanes.push(lane.collect());
+        }
+        lanes
+            .into_iter()
+            .map(|rows| Self(EvenlyArranged::new(rows, BlockPos::new(width - 2, 0, 0))))
+            .collect()
+    }
+}
+
+impl AsLayout for LinearLayout {
+    fn as_layout(&self) -> &impl Layout {
+        &self.0
+    }
+}
+
+/// One directional row of template cells.
+struct Row(Overlaid<Turn, EvenlyArranged<Template>>);
+
+impl Row {
+    /// Arranges its region of cells in the row direction, draining them.
+    pub(crate) fn new(
+        cells: &mut [Cell],
+        scale: ScaleMode,
+        width: i32,
+        leading_turn: bool,
+        south_bound: bool,
+        row_length: usize,
+    ) -> Self {
+        let templates: Vec<Template> = cells
+            .iter_mut()
+            .map(|cell| Template::new(cell, scale, south_bound))
+            .collect();
+        // every row spans the full `row_length`
+        let depth = 2 * row_length as i32 + 2;
+        let pitch = BlockPos::new(0, 0, if south_bound { 2 } else { -2 });
+        let cells = EvenlyArranged::new(templates, pitch);
+        let turn = Turn::new(width, south_bound, leading_turn);
+        let size = BlockPos::new(width, cells.size().y, depth);
+        let turn_anchor = BlockPos::new(0, 0, if south_bound { 0 } else { depth - 1 });
+        let cells_z = match south_bound {
+            true => 1,
+            false => depth - 1 - cells.size().z,
+        };
+        let cells_anchor = BlockPos::new(width - scale.width(), 0, cells_z);
+        Self(Overlaid::new(turn_anchor, turn, cells_anchor, cells, size))
+    }
+}
+
+impl AsLayout for Row {
+    fn as_layout(&self) -> &impl Layout {
+        &self.0
+    }
+}
+
 // Data containers: Cells & ScaleMode
 //
 // Data containers are a parallel layer to the structural layout, declaring a
@@ -225,88 +307,6 @@ impl ScaleMode {
         let branch = tick % 2 == 1;
         let cell = tick as usize / 2 + usize::from(self == Self::Scale1 && !branch);
         (cell, branch)
-    }
-}
-
-// Structural layout: LinearLayout & Row
-//
-// The structural layout layer is the hierarchy that generates and organizes
-// layouts; it produces no blocks itself and only performs layout.
-//
-// ++++++++++++============++++++++++++============++++++++++++============
-
-/// A zigzag linear layout for one track.
-pub struct LinearLayout(EvenlyArranged<Row>);
-
-impl LinearLayout {
-    /// Lays a pre-filed cell container out into lanes.
-    pub(crate) fn new(
-        mut cells: Cells,
-        scale: ScaleMode,
-        wrap_length: Option<NonZero<Tick>>,
-        gap: u32,
-    ) -> Vec<Self> {
-        let width = scale.width() + gap as i32 + 1;
-        let row_length = wrap_length.map_or(cells.len(), |w| w.get() as usize);
-
-        let mut lanes: Vec<Vec<Row>> = Vec::new();
-        while cells.has_notes() {
-            let lane = (0..cells.len()).step_by(row_length).map(|start| {
-                let index = start / row_length;
-                let region = cells.window(start, row_length);
-                Row::new(region, scale, width, index > 0, index % 2 == 0, row_length)
-            });
-            lanes.push(lane.collect());
-        }
-        lanes
-            .into_iter()
-            .map(|rows| Self(EvenlyArranged::new(rows, BlockPos::new(width - 2, 0, 0))))
-            .collect()
-    }
-}
-
-impl AsLayout for LinearLayout {
-    fn as_layout(&self) -> &impl Layout {
-        &self.0
-    }
-}
-
-/// One directional row of template cells.
-struct Row(Overlaid<Turn, EvenlyArranged<Template>>);
-
-impl Row {
-    /// Arranges its region of cells in the row direction, draining them.
-    pub(crate) fn new(
-        cells: &mut [Cell],
-        scale: ScaleMode,
-        width: i32,
-        leading_turn: bool,
-        south_bound: bool,
-        row_length: usize,
-    ) -> Self {
-        let templates: Vec<Template> = cells
-            .iter_mut()
-            .map(|cell| Template::new(cell, scale, south_bound))
-            .collect();
-        // every row spans the full `row_length`
-        let depth = 2 * row_length as i32 + 2;
-        let pitch = BlockPos::new(0, 0, if south_bound { 2 } else { -2 });
-        let cells = EvenlyArranged::new(templates, pitch);
-        let turn = Turn::new(width, south_bound, leading_turn);
-        let size = BlockPos::new(width, cells.size().y, depth);
-        let turn_anchor = BlockPos::new(0, 0, if south_bound { 0 } else { depth - 1 });
-        let cells_z = match south_bound {
-            true => 1,
-            false => depth - 1 - cells.size().z,
-        };
-        let cells_anchor = BlockPos::new(width - scale.width(), 0, cells_z);
-        Self(Overlaid::new(turn_anchor, turn, cells_anchor, cells, size))
-    }
-}
-
-impl AsLayout for Row {
-    fn as_layout(&self) -> &impl Layout {
-        &self.0
     }
 }
 
