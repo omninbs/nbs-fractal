@@ -77,6 +77,30 @@ impl Layout for Box<dyn Layout + '_> {
     }
 }
 
+// AsLayout
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+/// A transparent wrapper that forwards every [`Layout`] query to an inner layout.
+///
+/// Implementing the single [`as_layout`](Self::as_layout) accessor is enough:
+/// the blanket [`Layout`] impl below derives the whole interface from it, so
+/// wrappers that add no query logic need no hand-written delegation.
+pub trait AsLayout {
+    /// Returns the wrapped layout that queries are forwarded to.
+    fn as_layout(&self) -> &impl Layout;
+}
+
+impl<T: AsLayout> Layout for T {
+    fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
+        self.as_layout().block_at(pos)
+    }
+
+    fn size(&self) -> BlockPos {
+        self.as_layout().size()
+    }
+}
+
 // EdgeArranged
 //
 // ++++++++++++============++++++++++++============++++++++++++============
@@ -96,13 +120,9 @@ impl<L: Layout> EdgeArranged<L> {
     }
 }
 
-impl<L: Layout> Layout for EdgeArranged<L> {
-    fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
-        self.inner.get_block(pos)
-    }
-
-    fn size(&self) -> BlockPos {
-        self.inner.size()
+impl<L: Layout> AsLayout for EdgeArranged<L> {
+    fn as_layout(&self) -> &impl Layout {
+        &self.inner
     }
 }
 

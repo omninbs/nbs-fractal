@@ -1,6 +1,6 @@
 //! Linear time-proportional layout for NBS song projection.
 
-use super::{EvenlyArranged, Facing, Layout, Overlaid};
+use super::{AsLayout, EvenlyArranged, Facing, Layout, Overlaid};
 use super::{WithFloor, air, chain_block, inst_block, note_block};
 use super::{redstone_block, repeater, sticky_piston};
 use crate::schematic::{WireConn, wire_state};
@@ -38,13 +38,9 @@ impl MultiLinearLayout {
     }
 }
 
-impl Layout for MultiLinearLayout {
-    fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
-        self.0.get_block(pos)
-    }
-
-    fn size(&self) -> BlockPos {
-        self.0.size()
+impl AsLayout for MultiLinearLayout {
+    fn as_layout(&self) -> &impl Layout {
+        &self.0
     }
 }
 
@@ -79,13 +75,9 @@ impl StackedLinearLayout {
     }
 }
 
-impl Layout for StackedLinearLayout {
-    fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
-        self.0.get_block(pos)
-    }
-
-    fn size(&self) -> BlockPos {
-        self.0.size()
+impl AsLayout for StackedLinearLayout {
+    fn as_layout(&self) -> &impl Layout {
+        &self.0
     }
 }
 
@@ -273,13 +265,9 @@ impl LinearLayout {
     }
 }
 
-impl Layout for LinearLayout {
-    fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
-        self.0.get_block(pos)
-    }
-
-    fn size(&self) -> BlockPos {
-        self.0.size()
+impl AsLayout for LinearLayout {
+    fn as_layout(&self) -> &impl Layout {
+        &self.0
     }
 }
 
@@ -316,13 +304,9 @@ impl Row {
     }
 }
 
-impl Layout for Row {
-    fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
-        self.0.block_at(pos)
-    }
-
-    fn size(&self) -> BlockPos {
-        self.0.size()
+impl AsLayout for Row {
+    fn as_layout(&self) -> &impl Layout {
+        &self.0
     }
 }
 
