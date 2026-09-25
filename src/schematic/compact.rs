@@ -1,6 +1,6 @@
 //! Compact note block layouts for NBS song projection.
 
-use super::{Arranged, Axis, Layout, chain_block, inst_block};
+use super::{Arranged, AsLayout, Axis, Layout, chain_block, inst_block};
 use super::{Facing, air, note_block, redstone_wire, repeater};
 use crate::{GameTick, RedStoneTick};
 use rsnbs::note::{Notes, Tone};
@@ -63,13 +63,9 @@ impl MultiCompactLayout {
     }
 }
 
-impl Layout for MultiCompactLayout {
-    fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
-        self.0.get_block(pos)
-    }
-
-    fn size(&self) -> BlockPos {
-        self.0.size()
+impl AsLayout for MultiCompactLayout {
+    fn as_layout(&self) -> &impl Layout {
+        &self.0
     }
 }
 
