@@ -14,7 +14,7 @@ mod compact;
 mod linear;
 mod tapped;
 
-// Layout trait
+// Layout & AsLayout
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
@@ -77,10 +77,6 @@ impl Layout for Box<dyn Layout + '_> {
     }
 }
 
-// AsLayout
-//
-// ++++++++++++============++++++++++++============++++++++++++============
-
 /// A transparent wrapper that forwards every [`Layout`] query to an inner layout.
 ///
 /// Implementing the single [`as_layout`](Self::as_layout) accessor is enough:
@@ -101,32 +97,7 @@ impl<T: AsLayout> Layout for T {
     }
 }
 
-// EdgeArranged
-//
-// ++++++++++++============++++++++++++============++++++++++++============
-
-/// Like [`Arranged`], but aligns sub-layouts by their far-edge on cross-axes.
-pub struct EdgeArranged<L: Layout> {
-    inner: Reverse<Arranged<Reverse<L>>>,
-}
-
-impl<L: Layout> EdgeArranged<L> {
-    /// `align` is passed to both inner (per-sub-layout) and outer (whole) Reverse.
-    pub fn new<I: IntoIterator<Item = L>>(layouts: I, axis: Axis, gap: u32, align: Mask) -> Self {
-        let reversed = layouts.into_iter().map(|l| Reverse::new(l, align));
-        let arranged = Arranged::new(reversed, axis, gap);
-        let inner = Reverse::new(arranged, align);
-        Self { inner }
-    }
-}
-
-impl<L: Layout> AsLayout for EdgeArranged<L> {
-    fn as_layout(&self) -> &impl Layout {
-        &self.inner
-    }
-}
-
-// Arranged
+// Arranged & EdgeArranged
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
@@ -175,6 +146,24 @@ impl<L: Layout> Layout for Arranged<L> {
 
     fn size(&self) -> BlockPos {
         self.size
+    }
+}
+
+/// Like [`Arranged`], but aligns sub-layouts by their far-edge on cross-axes.
+pub struct EdgeArranged<L: Layout>(Reverse<Arranged<Reverse<L>>>);
+
+impl<L: Layout> EdgeArranged<L> {
+    /// `align` is passed to both inner (per-sub-layout) and outer (whole) Reverse.
+    pub fn new<I: IntoIterator<Item = L>>(layouts: I, axis: Axis, gap: u32, align: Mask) -> Self {
+        let reversed = layouts.into_iter().map(|l| Reverse::new(l, align));
+        let arranged = Arranged::new(reversed, axis, gap);
+        Self(Reverse::new(arranged, align))
+    }
+}
+
+impl<L: Layout> AsLayout for EdgeArranged<L> {
+    fn as_layout(&self) -> &impl Layout {
+        &self.0
     }
 }
 
@@ -253,59 +242,6 @@ impl<L: Layout> Layout for EvenlyArranged<L> {
     }
 }
 
-// Anchored
-//
-// ++++++++++++============++++++++++++============++++++++++++============
-
-/// A layout wrapper that places sub-layouts at explicit anchor positions.
-///
-/// Queries probe every entry in order via dynamic dispatch, so the cost is
-/// O(n) in the entry count and comparatively heavy; suited to small fixed
-/// groupings.
-pub struct Anchored {
-    entries: Vec<(Box<dyn Layout>, BlockPos)>,
-    size: BlockPos,
-}
-
-impl Anchored {
-    /// Build from initial entries; [`Self::push`] appends more later.
-    pub fn new(entries: impl IntoIterator<Item = (Box<dyn Layout>, BlockPos)>) -> Self {
-        let mut anchored = Self::default();
-        for (layout, anchor) in entries {
-            anchored.push(layout, anchor);
-        }
-        anchored
-    }
-
-    pub fn push(&mut self, layout: impl Into<Box<dyn Layout>>, anchor: BlockPos) {
-        let layout = layout.into();
-        let far = anchor + layout.size();
-        self.size = include(self.size, far);
-        self.entries.push((layout, anchor));
-    }
-}
-
-impl Layout for Anchored {
-    fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
-        self.entries
-            .iter()
-            .find_map(|(layout, anchor)| layout.try_get_block(pos - *anchor))
-    }
-
-    fn size(&self) -> BlockPos {
-        self.size
-    }
-}
-
-impl Default for Anchored {
-    fn default() -> Self {
-        Self {
-            entries: Vec::new(),
-            size: BlockPos::ORIGIN,
-        }
-    }
-}
-
 // Overlaid
 //
 // ++++++++++++============++++++++++++============++++++++++++============
@@ -358,20 +294,33 @@ impl<A: Layout, B: Layout> Layout for Overlaid<A, B> {
 /// the layout has no block-internal facing transform, so the block's own
 /// orientation state is never dictated by it.
 pub struct Reverse<L: Layout> {
+    /// The wrapped layout; queries are mirrored into its local space.
     layout: L,
-    sign: Mask,
+    /// Per-axis mirror offset `sign * (size - 1)`.
+    bias: BlockPos,
+    /// Per-axis mirror factor: `-1` on reversed axes, `+1` elsewhere.
+    factor: BlockPos,
 }
 
 impl<L: Layout> Reverse<L> {
     pub fn new(layout: L, sign: Mask) -> Self {
-        Self { layout, sign }
+        let bias = sign * (layout.size() - BlockPos::new(1, 1, 1));
+        let factor = BlockPos::new(1, 1, 1) - sign * 2;
+        Self {
+            layout,
+            bias,
+            factor,
+        }
     }
 }
 
 impl<L: Layout> Layout for Reverse<L> {
     fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
-        let size = self.layout.size();
-        let orig = pos + self.sign * (size - BlockPos::new(1, 1, 1) - pos * 2);
+        let orig = BlockPos::new(
+            self.bias.x + self.factor.x * pos.x,
+            self.bias.y + self.factor.y * pos.y,
+            self.bias.z + self.factor.z * pos.z,
+        );
         self.layout.get_block(orig)
     }
 
