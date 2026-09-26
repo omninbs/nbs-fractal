@@ -7,7 +7,7 @@ use super::{
 use crate::RedStoneTick;
 use crate::analysis::BoundedTec;
 use mcdata::{GenericBlockState, util::BlockPos};
-use rsnbs::note::{Instrument, Key, Notes, Tone};
+use rsnbs::note::{Instrument, Key, Tone};
 use rsnbs::types::Tick;
 use std::num::NonZero;
 
@@ -45,8 +45,11 @@ impl TappedLayout {
                 .kernel
                 .into_notes()
                 .into_iter()
-                .map(|(tick, tones)| (tick + 2 * lyr as u32, tones))
-                .collect::<Notes<RedStoneTick, Vec<Tone>>>();
+                .flat_map(|(tick, tones)| {
+                    tones
+                        .into_iter()
+                        .map(move |tone| (tick + 2 * lyr as u32, tone))
+                });
             let layout = CompactLayout::new(notes, repeater_coarse, wrap_length, 0);
 
             // the bottom line carries the switch

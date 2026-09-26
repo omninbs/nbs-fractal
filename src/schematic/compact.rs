@@ -4,7 +4,7 @@ use super::{AsLayout, EvenlyArranged, Facing, Layout, Overlaid, WithFloor};
 use super::{air, chain_block, inst_block, note_block, redstone_wire, repeater};
 use crate::{GameTick, RedStoneTick};
 use mcdata::{GenericBlockState, util::BlockPos};
-use rsnbs::note::{Notes, Tone};
+use rsnbs::note::Tone;
 use rsnbs::types::Tick;
 use std::iter::{self, Peekable};
 use std::num::NonZero;
@@ -18,7 +18,7 @@ pub struct MultiCompactLayout(EvenlyArranged<WithFloor<CompactLayout>>);
 
 impl MultiCompactLayout {
     /// Create a multi-track compact layout from multiple note groups.
-    pub fn new<Trks, Trk, Chord>(
+    pub fn new<Trks, Trk, T>(
         tracks: Trks,
         wrap_length: Option<NonZero<usize>>,
         gap: u32,
@@ -26,14 +26,12 @@ impl MultiCompactLayout {
     ) -> Self
     where
         Trks: IntoIterator<Item = (Trk, Option<NonZero<RedStoneTick>>)>,
-        Trk: IntoIterator<Item = (GameTick, Chord)>,
-        Chord: IntoIterator,
-        Chord::Item: Into<Tone>,
+        Trk: IntoIterator<Item = (GameTick, T)>,
+        T: Into<Tone>,
     {
         let lines = tracks
             .into_iter()
-            .flat_map(|(notes, coarse)| split_even_odd(notes, coarse))
-            .filter(|(notes, _)| !notes.is_empty());
+            .flat_map(|(notes, coarse)| split_even_odd(notes, coarse));
         let layers = lines.map(|(notes, coarse)| {
             let line = CompactLayout::new(notes, coarse, wrap_length, gap);
             WithFloor::new(line, full)
@@ -49,23 +47,18 @@ impl AsLayout for MultiCompactLayout {
 }
 
 /// Splits game tick notes into even and odd redstone tick lines.
-fn split_even_odd<Trks, Chord>(
-    tracks: Trks,
+fn split_even_odd<I: IntoIterator<Item = (GameTick, T)>, T: Into<Tone>>(
+    notes: I,
     coarse: Option<NonZero<Tick>>,
-) -> impl Iterator<Item = (Notes<RedStoneTick, Vec<Tone>>, Option<NonZero<Tick>>)>
-where
-    Trks: IntoIterator<Item = (GameTick, Chord)>,
-    Chord: IntoIterator,
-    Chord::Item: Into<Tone>,
-{
-    let mut lines: [Notes<RedStoneTick, Vec<Tone>>; 2] = Default::default();
-    for (game_tick, chord) in tracks {
-        lines[(game_tick % 2) as usize]
-            .entry(game_tick / 2)
-            .or_default()
-            .extend(chord.into_iter().map(Into::into));
+) -> impl Iterator<Item = (Vec<(RedStoneTick, Tone)>, Option<NonZero<Tick>>)> {
+    let mut lines: [Vec<(RedStoneTick, Tone)>; 2] = Default::default();
+    for (game_tick, note) in notes {
+        lines[(game_tick % 2) as usize].push((game_tick / 2, note.into()));
     }
-    lines.into_iter().map(move |line| (line, coarse))
+    lines
+        .into_iter()
+        .filter(|line| !line.is_empty())
+        .map(move |line| (line, coarse))
 }
 
 // Layout: CompactLayout & Row
@@ -75,28 +68,21 @@ where
 pub struct CompactLayout(EvenlyArranged<Row>);
 
 impl CompactLayout {
-    pub fn new<Trk, Chord>(
-        notes: Trk,
+    pub fn new<I: IntoIterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
+        notes: I,
         repeater_coarse: Option<NonZero<RedStoneTick>>,
         wrap_length: Option<NonZero<usize>>,
         gap: u32,
-    ) -> Self
-    where
-        Trk: IntoIterator<Item = (RedStoneTick, Chord)>,
-        Chord: IntoIterator,
-        Chord::Item: Into<Tone>,
-    {
+    ) -> Self {
         let width = 4 + gap as i32;
         let coarse = repeater_coarse.map_or(Tick::MAX, NonZero::get);
-        let notes = notes
-            .into_iter()
-            .flat_map(|(tick, chord)| chord.into_iter().map(move |note| (tick, note.into())));
+        let notes = notes.into_iter();
         let mut events = Events::new(notes);
-        let mut rows = Vec::new();
-        while let Some(row) = Row::new(&mut events, width, coarse, wrap_length, rows.len() % 2 == 0)
-        {
-            rows.push(row);
-        }
+        let mut south_bound = false;
+        let rows = iter::from_fn(move || {
+            south_bound = !south_bound;
+            Row::new(&mut events, width, coarse, wrap_length, south_bound)
+        });
         Self(EvenlyArranged::new(rows, BlockPos::new(width - 2, 0, 0)))
     }
 }
@@ -110,7 +96,7 @@ impl AsLayout for CompactLayout {
 struct Row(Overlaid<Turn, EvenlyArranged<Tile>>);
 
 impl Row {
-    fn new<I: Iterator<Item = (RedStoneTick, Tone)>>(
+    fn new<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
         events: &mut Events<I>,
         width: i32,
         coarse: Tick,
@@ -154,19 +140,19 @@ impl<I: Iterator> Events<I> {
     }
 }
 
-impl<I: Iterator<Item = (RedStoneTick, Tone)>> Events<I> {
+impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Events<I> {
     fn current(&self) -> Option<(RedStoneTick, &[Tone])> {
         (!self.cache.is_empty()).then(|| (self.wait, self.cache.as_slice()))
     }
 
     fn load(notes: &mut Peekable<I>) -> Option<(RedStoneTick, impl Iterator<Item = Tone> + '_)> {
         let (tick, note) = notes.next()?;
-        let rest = iter::from_fn(move || notes.next_if(|&(t, _)| t == tick).map(|(_, n)| n));
-        Some((tick, iter::once(note).chain(rest)))
+        let rest = iter::from_fn(move || notes.next_if(|&(t, _)| t == tick).map(|(_, n)| n.into()));
+        Some((tick, iter::once(note.into()).chain(rest)))
     }
 }
 
-impl<I: Iterator<Item = (RedStoneTick, Tone)>> Iterator for Events<I> {
+impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Iterator for Events<I> {
     type Item = Event;
 
     fn next(&mut self) -> Option<Event> {
