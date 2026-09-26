@@ -32,13 +32,12 @@ impl MultiCompactLayout {
         let lines = tracks
             .into_iter()
             .flat_map(|(notes, coarse)| split_even_odd(notes, coarse))
-            .filter(|(notes, _)| !notes.is_empty())
-            .map(|(notes, coarse)| {
-                let line = CompactLayout::new(notes, coarse, wrap_length, gap);
-                WithFloor::new(line, full)
-            });
-        // A line is four tall, plus one block of headroom.
-        Self(EvenlyArranged::new(lines, BlockPos::new(0, 4, 0)))
+            .filter(|(notes, _)| !notes.is_empty());
+        let layers = lines.map(|(notes, coarse)| {
+            let line = CompactLayout::new(notes, coarse, wrap_length, gap);
+            WithFloor::new(line, full)
+        });
+        Self(EvenlyArranged::new(layers, BlockPos::new(0, 4, 0)))
     }
 }
 
@@ -72,8 +71,6 @@ where
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-/// A single compact note block track: one redstone line folded into a serpentine
-/// stack of rows.
 pub struct CompactLayout(());
 
 impl CompactLayout {
@@ -116,10 +113,6 @@ enum Tile {
         south_bound: bool,
     },
     Node {
-        cap: [Option<Tone>; 2],
-        south_bound: bool,
-    },
-    Port {
         stem: RedStoneTick,
         cap: [Option<Tone>; 2],
         south_bound: bool,
@@ -131,15 +124,13 @@ impl Tile {
         match *self {
             Tile::Hold { south_bound, .. }
             | Tile::Sink { south_bound, .. }
-            | Tile::Node { south_bound, .. }
-            | Tile::Port { south_bound, .. } => south_bound,
+            | Tile::Node { south_bound, .. } => south_bound,
         }
     }
 
     fn stem(&self) -> RedStoneTick {
         match *self {
-            Tile::Hold { stem, .. } | Tile::Sink { stem, .. } | Tile::Port { stem, .. } => stem,
-            Tile::Node { .. } => 0,
+            Tile::Hold { stem, .. } | Tile::Sink { stem, .. } | Tile::Node { stem, .. } => stem,
         }
     }
 }
@@ -151,33 +142,43 @@ impl Layout for Tile {
         let local_z = if south_bound { pos.z } else { 1 - pos.z };
         let facing = if south_bound { South } else { North };
         let repeater = |delay: RedStoneTick| repeater(delay.to_string(), facing, false, false);
-        match (*self, local_z, pos.x, pos.y) {
-            // stem
-            (_, 0, 1, 0) => Some(chain_block()),
-            (_, 0, 1, 1) if self.stem() == 0 => Some(redstone_wire()),
-            (_, 0, 1, 1) => Some(repeater(self.stem())),
+        debug_assert!(!matches!(self, Hold { stem: 0, .. } | Hold { cap: 0, .. }));
 
-            // cap: hold
-            (Hold { .. }, 1, 1, 0) => Some(chain_block()),
-            (Hold { cap, .. }, 1, 1, 1) => Some(repeater(cap)),
-
-            // cap: node
-            (Node { .. } | Port { .. }, 1, 1, 0 | 1) => Some(chain_block()),
-            (Node { .. } | Port { .. }, 1, 1, 2) => Some(redstone_wire()),
-            (Node { cap, .. } | Port { cap, .. }, 1, 0, 0) => Some(inst_block(cap[0], air)),
-            (Node { cap, .. } | Port { cap, .. }, 1, 0, 1) => Some(note_block(cap[0], air)),
-            (Node { cap, .. } | Port { cap, .. }, 1, 2, 0) => Some(inst_block(cap[1], air)),
-            (Node { cap, .. } | Port { cap, .. }, 1, 2, 1) => Some(note_block(cap[1], air)),
-
-            // cap: sink
-            (Sink { cap, .. }, 1, 1, 0) => Some(inst_block(cap[0], chain_block)),
-            (Sink { cap, .. }, 1, 1, 1) => Some(note_block(cap[0], chain_block)),
-            (Sink { cap, .. }, 1, 0, 0) => Some(inst_block(cap[1], air)),
-            (Sink { cap, .. }, 1, 0, 1) => Some(note_block(cap[1], air)),
-            (Sink { cap, .. }, 1, 2, 0) => Some(inst_block(cap[2], air)),
-            (Sink { cap, .. }, 1, 2, 1) => Some(note_block(cap[2], air)),
-
+        let stem = || match (pos.x, pos.y) {
+            (1, 0) => Some(chain_block()),
+            (1, 1) if self.stem() == 0 => Some(redstone_wire()),
+            (1, 1) => Some(repeater(self.stem())),
             _ => None,
+        };
+        let hold = |cap: RedStoneTick| match (pos.x, pos.y) {
+            (1, 0) => Some(chain_block()),
+            (1, 1) => Some(repeater(cap)),
+            _ => None,
+        };
+        let node = |cap: [Option<Tone>; 2]| match (pos.x, pos.y) {
+            (1, 0 | 1) => Some(chain_block()),
+            (1, 2) => Some(redstone_wire()),
+            (0, 0) => Some(inst_block(cap[0], air)),
+            (0, 1) => Some(note_block(cap[0], air)),
+            (2, 0) => Some(inst_block(cap[1], air)),
+            (2, 1) => Some(note_block(cap[1], air)),
+            _ => None,
+        };
+        let sink = |cap: [Option<Tone>; 3]| match (pos.x, pos.y) {
+            (1, 0) => Some(inst_block(cap[0], chain_block)),
+            (1, 1) => Some(note_block(cap[0], chain_block)),
+            (0, 0) => Some(inst_block(cap[1], air)),
+            (0, 1) => Some(note_block(cap[1], air)),
+            (2, 0) => Some(inst_block(cap[2], air)),
+            (2, 1) => Some(note_block(cap[2], air)),
+            _ => None,
+        };
+        match (local_z, *self) {
+            (0, _) => stem(),
+            (1, Hold { cap, .. }) => hold(cap),
+            (1, Node { cap, .. }) => node(cap),
+            (1, Sink { cap, .. }) => sink(cap),
+            _ => unreachable!(),
         }
     }
 
@@ -218,26 +219,33 @@ impl Layout for Turn {
     fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
         use self::{Facing::*, Turn::*};
         let local_x = self.width() - 1 - pos.x;
-        let repeater = || repeater(self.stem().to_string(), East, false, false);
-        match (*self, local_x, pos.y) {
-            // stem
-            (_, 2, 1) if self.stem() > 0 => Some(repeater()),
-            (_, 2.., 0) => Some(chain_block()),
-            (_, 2.., 1) => Some(redstone_wire()),
+        let repeater = |delay: RedStoneTick| repeater(delay.to_string(), East, false, false);
 
-            // cap: sink
-            (Sink { cap, .. }, 1, 0) => Some(inst_block(cap[0], chain_block)),
-            (Sink { cap, .. }, 1, 1) => Some(note_block(cap[0], chain_block)),
-            (Sink { cap, .. }, 0, 0) => Some(inst_block(cap[1], air)),
-            (Sink { cap, .. }, 0, 1) => Some(note_block(cap[1], air)),
-
-            // cap: node
-            (Node { .. }, 1, 0 | 1) => Some(chain_block()),
-            (Node { .. }, 1, 2) => Some(redstone_wire()),
-            (Node { cap, .. }, 0, 0) => Some(inst_block(cap, air)),
-            (Node { cap, .. }, 0, 1) => Some(note_block(cap, air)),
-
+        let stem = || match (local_x, pos.y) {
+            (2.., 0) => Some(chain_block()),
+            (2, 1) if self.stem() > 0 => Some(repeater(self.stem())),
+            (2.., 1) => Some(redstone_wire()),
             _ => None,
+        };
+        let sink = |cap: [Option<Tone>; 2]| match (local_x, pos.y) {
+            (1, 0) => Some(inst_block(cap[0], chain_block)),
+            (1, 1) => Some(note_block(cap[0], chain_block)),
+            (0, 0) => Some(inst_block(cap[1], air)),
+            (0, 1) => Some(note_block(cap[1], air)),
+            _ => None,
+        };
+        let node = |cap: Option<Tone>| match (local_x, pos.y) {
+            (1, 0 | 1) => Some(chain_block()),
+            (1, 2) => Some(redstone_wire()),
+            (0, 0) => Some(inst_block(cap, air)),
+            (0, 1) => Some(note_block(cap, air)),
+            _ => None,
+        };
+        match (local_x, *self) {
+            (2.., _) => stem(),
+            (0 | 1, Sink { cap, .. }) => sink(cap),
+            (0 | 1, Node { cap, .. }) => node(cap),
+            _ => unreachable!(),
         }
     }
 
