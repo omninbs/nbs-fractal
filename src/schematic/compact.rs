@@ -6,6 +6,7 @@ use crate::{GameTick, RedStoneTick};
 use mcdata::{GenericBlockState, util::BlockPos};
 use rsnbs::note::{Notes, Tone};
 use rsnbs::types::Tick;
+use std::iter::{self, Peekable};
 use std::num::NonZero;
 
 // Shell: MultiCompactLayout
@@ -93,6 +94,65 @@ impl CompactLayout {
 impl AsLayout for CompactLayout {
     fn as_layout(&self) -> &impl Layout {
         &self.0
+    }
+}
+
+// Data container: Events
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+enum Event {
+    Wait,
+    Note(Tone),
+}
+
+struct Events<I: Iterator> {
+    notes: Peekable<I>,
+    last: RedStoneTick,
+    wait: RedStoneTick,
+    cache: Vec<Tone>,
+}
+
+impl<I: Iterator> Events<I> {
+    fn new(notes: I) -> Self {
+        Self {
+            notes: notes.peekable(),
+            last: RedStoneTick::MAX,
+            wait: 0,
+            cache: Vec::new(),
+        }
+    }
+}
+
+impl<I: Iterator<Item = (RedStoneTick, Tone)>> Events<I> {
+    fn current(&self) -> Option<(RedStoneTick, &[Tone])> {
+        (!self.cache.is_empty()).then(|| (self.wait, self.cache.as_slice()))
+    }
+
+    fn load(notes: &mut Peekable<I>) -> Option<(RedStoneTick, impl Iterator<Item = Tone> + '_)> {
+        let (tick, note) = notes.next()?;
+        let rest = iter::from_fn(move || notes.next_if(|&(t, _)| t == tick).map(|(_, n)| n));
+        Some((tick, iter::once(note).chain(rest)))
+    }
+}
+
+impl<I: Iterator<Item = (RedStoneTick, Tone)>> Iterator for Events<I> {
+    type Item = Event;
+
+    fn next(&mut self) -> Option<Event> {
+        if self.cache.is_empty() {
+            debug_assert_eq!(self.wait, 0);
+            let (tick, notes) = Self::load(&mut self.notes)?;
+            self.wait = tick.wrapping_sub(self.last);
+            self.last = tick;
+            self.cache.extend(notes);
+        }
+        if self.wait == 0 {
+            self.cache.pop().map(Event::Note)
+        } else {
+            self.wait -= 1;
+            Some(Event::Wait)
+        }
     }
 }
 
