@@ -147,12 +147,8 @@ impl Row {
         let cells = EvenlyArranged::new(templates, pitch);
         let turn = Turn::new(width, south_bound, leading_turn);
         let size = BlockPos::new(width, cells.size().y, depth);
-        let turn_anchor = BlockPos::new(0, 0, if south_bound { 0 } else { depth - 1 });
-        let cells_z = match south_bound {
-            true => 1,
-            false => depth - 1 - cells.size().z,
-        };
-        let cells_anchor = BlockPos::new(width - scale.width(), 0, cells_z);
+        let turn_anchor = BlockPos::new(0, 0, if south_bound { 0 } else { -1 });
+        let cells_anchor = BlockPos::new(-1, 0, if south_bound { 1 } else { -2 });
         Self(Overlaid::new(turn_anchor, turn, cells_anchor, cells, size))
     }
 }

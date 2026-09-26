@@ -103,7 +103,29 @@ impl Row {
         wrap_length: Option<NonZero<usize>>,
         south_bound: bool,
     ) -> Option<Self> {
-        todo!()
+        let len = wrap_length.map_or(usize::MAX, NonZero::get);
+
+        let turn: Turn = todo!();
+
+        let mut column = 1;
+        let mut tiles = iter::from_fn(|| {
+            if column == len {
+                return None;
+            }
+            let closing = column + 1 == len;
+            column += 1;
+            let tile: Tile = todo!();
+            Some(tile)
+        });
+
+        let pitch = if south_bound { 2 } else { -2 };
+        let rest = EvenlyArranged::new(tiles, BlockPos::new(0, 0, pitch));
+        let depth = wrap_length.map_or(column, NonZero::get);
+        let southing = 2 * depth as i32;
+        let size = BlockPos::new(width, 3, southing);
+        let turn_at = BlockPos::new(0, 0, if south_bound { 0 } else { -1 });
+        let tiles_at = BlockPos::new(-1, 0, if south_bound { 1 } else { -2 });
+        Some(Self(Overlaid::new(turn_at, turn, tiles_at, rest, size)))
     }
 }
 

@@ -256,10 +256,9 @@ impl<L: Layout> Layout for EvenlyArranged<L> {
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-/// Overlaps two positioned sub-layouts; the first wins where they coincide.
-///
-/// The combined size is supplied at construction, keeping [`Layout::block_at`]
-/// free of per-query size arithmetic.
+/// Overlaps two positioned sub-layouts, the first covering the second, where a
+/// non-negative anchor is an offset from the origin and a negative one an
+/// offset from `size + 1`.
 pub struct Overlaid<A: Layout, B: Layout> {
     first: (BlockPos, A),
     second: (BlockPos, B),
@@ -274,9 +273,16 @@ impl<A: Layout, B: Layout> Overlaid<A, B> {
         second: B,
         size: BlockPos,
     ) -> Self {
+        fn anchor(anchor: BlockPos, inner: BlockPos, size: BlockPos) -> BlockPos {
+            let axis = |a: i32, i: i32, s: i32| if a < 0 { s - i + a + 1 } else { a };
+            let x = axis(anchor.x, inner.x, size.x);
+            let y = axis(anchor.y, inner.y, size.y);
+            let z = axis(anchor.z, inner.z, size.z);
+            BlockPos::new(x, y, z)
+        }
         Self {
-            first: (first_anchor, first),
-            second: (second_anchor, second),
+            first: (anchor(first_anchor, first.size(), size), first),
+            second: (anchor(second_anchor, second.size(), size), second),
             size,
         }
     }
