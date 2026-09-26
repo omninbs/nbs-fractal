@@ -104,7 +104,84 @@ impl Row {
         south_bound: bool,
     ) -> Option<Self> {
         let len = wrap_length.map_or(usize::MAX, NonZero::get);
-        let closing = len == 1;
+
+        let turn = Self::turn(events, width, coarse, len == 1)?;
+        let tiles = Self::tiles(events, len);
+        let depth = wrap_length.map_or(tiles.len() + 1, NonZero::get);
+        let southing = 2 * depth as i32;
+        let size = BlockPos::new(width, 3, southing);
+        let pitch = if south_bound { 2 } else { -2 };
+        let rest = EvenlyArranged::new(tiles, BlockPos::new(0, 0, pitch));
+        let turn_at = BlockPos::new(0, 0, if south_bound { 0 } else { -1 });
+        let tiles_at = BlockPos::new(-1, 0, if south_bound { 1 } else { -2 });
+        Some(Self(Overlaid::new(turn_at, turn, tiles_at, rest, size)))
+    }
+
+    fn turn<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
+        events: &mut Events<I>,
+        width: i32,
+        coarse: Tick,
+        closing: bool,
+    ) -> Option<Turn> {
+        fn micro(
+            coarse: Tick,
+            chained: bool,
+            opening: bool,
+            closing: bool,
+            wait: RedStoneTick,
+        ) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
+            let series = |stem: Tick, cap: Tick| Some((stem, cap, stem + cap));
+            match (chained, opening, closing) {
+                (false, false, _) if wait == coarse * 3 => series(coarse, 0),
+                (_, false, false) if wait > coarse * 2 => series(coarse, coarse),
+                (true, false, _) if wait == coarse * 2 => series(coarse, 1),
+                (true, false, _) if wait >= coarse => series(coarse - 1, 0),
+                (false, false, _) if wait > coarse => series(coarse, 0),
+                (false, true, _) if wait > coarse => series(coarse, 0),
+                _ => None,
+            }
+        }
+
+        fn pulse(
+            chained: bool,
+            wait: RedStoneTick,
+        ) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
+            match (chained, wait) {
+                (false, wait) if wait > 1 => Some((1, 0, 1)),
+                _ => None,
+            }
+        }
+
+        fn free(
+            opening: bool,
+            wait: RedStoneTick,
+        ) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
+            match (opening, wait) {
+                (true, wait) if wait > 4 => Some((4, 0, 4)),
+                (false, wait) if wait > 8 => Some((4, 4, 8)),
+                (false, wait) if wait > 4 => Some((4, 0, 4)),
+                _ => None,
+            }
+        }
+
+        fn buy(
+            coarse: Tick,
+            chained: bool,
+            wait: RedStoneTick,
+            opening: bool,
+            closing: bool,
+        ) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
+            debug_assert!(!((2..=4).contains(&coarse) && chained && opening));
+            debug_assert!(!(coarse == 1 && chained));
+
+            match coarse {
+                2..=4 => {
+                    micro(coarse, chained, opening, closing, wait).or_else(|| free(opening, wait))
+                }
+                1 => pulse(chained, wait).or_else(|| free(opening, wait)),
+                _ => free(opening, wait),
+            }
+        }
 
         let (wait, available) = events.pending()?;
         let terminal = !closing && (wait > 0 || available <= 2);
@@ -112,7 +189,7 @@ impl Row {
             true => buy(coarse, false, wait, true, closing),
             false => None,
         };
-        let turn = match bought {
+        Some(match bought {
             Some((stem, _, spent)) => {
                 for _ in 0..spent {
                     let event = events.next();
@@ -161,89 +238,28 @@ impl Row {
                     },
                 }
             }
-        };
+        })
+    }
 
+    fn tiles<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
+        events: &mut Events<I>,
+        len: usize,
+    ) -> Vec<Tile> {
         let mut column = 1;
-        let mut tiles = iter::from_fn(|| {
-            if column == len {
-                return None;
-            }
+        let mut tiles = Vec::new();
+        while column != len {
             let closing = column + 1 == len;
             column += 1;
             let tile: Tile = todo!();
-            Some(tile)
-        });
-
-        let pitch = if south_bound { 2 } else { -2 };
-        let rest = EvenlyArranged::new(tiles, BlockPos::new(0, 0, pitch));
-        let depth = wrap_length.map_or(column, NonZero::get);
-        let southing = 2 * depth as i32;
-        let size = BlockPos::new(width, 3, southing);
-        let turn_at = BlockPos::new(0, 0, if south_bound { 0 } else { -1 });
-        let tiles_at = BlockPos::new(-1, 0, if south_bound { 1 } else { -2 });
-        Some(Self(Overlaid::new(turn_at, turn, tiles_at, rest, size)))
+            tiles.push(tile);
+        }
+        tiles
     }
 }
 
 impl AsLayout for Row {
     fn as_layout(&self) -> &impl Layout {
         &self.0
-    }
-}
-
-// Spending waits
-//
-// ++++++++++++============++++++++++++============++++++++++++============
-
-fn buy(
-    coarse: Tick,
-    chained: bool,
-    wait: RedStoneTick,
-    opening: bool,
-    closing: bool,
-) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
-    debug_assert!(!((2..=4).contains(&coarse) && chained && opening));
-    debug_assert!(!(coarse == 1 && chained));
-
-    match coarse {
-        2..=4 => micro(coarse, chained, opening, closing, wait).or_else(|| free(opening, wait)),
-        1 => pulse(chained, wait).or_else(|| free(opening, wait)),
-        _ => free(opening, wait),
-    }
-}
-
-fn micro(
-    coarse: Tick,
-    chained: bool,
-    opening: bool,
-    closing: bool,
-    wait: RedStoneTick,
-) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
-    let series = |stem: Tick, cap: Tick| Some((stem, cap, stem + cap));
-    match (chained, opening, closing) {
-        (false, false, _) if wait == coarse * 3 => series(coarse, 0),
-        (_, false, false) if wait > coarse * 2 => series(coarse, coarse),
-        (true, false, _) if wait == coarse * 2 => series(coarse, 1),
-        (true, false, _) if wait >= coarse => series(coarse - 1, 0),
-        (false, false, _) if wait > coarse => series(coarse, 0),
-        (false, true, _) if wait > coarse => series(coarse, 0),
-        _ => None,
-    }
-}
-
-fn pulse(chained: bool, wait: RedStoneTick) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
-    match (chained, wait) {
-        (false, wait) if wait > 1 => Some((1, 0, 1)),
-        _ => None,
-    }
-}
-
-fn free(opening: bool, wait: RedStoneTick) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
-    match (opening, wait) {
-        (true, wait) if wait > 4 => Some((4, 0, 4)),
-        (false, wait) if wait > 8 => Some((4, 4, 8)),
-        (false, wait) if wait > 4 => Some((4, 0, 4)),
-        _ => None,
     }
 }
 
