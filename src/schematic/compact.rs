@@ -1,6 +1,6 @@
 //! Compact note block layouts for NBS song projection.
 
-use super::{AsLayout, EvenlyArranged, Facing, Layout, WithFloor};
+use super::{AsLayout, EvenlyArranged, Facing, Layout, Overlaid, WithFloor};
 use super::{air, chain_block, inst_block, note_block, redstone_wire, repeater};
 use crate::{GameTick, RedStoneTick};
 use mcdata::{GenericBlockState, util::BlockPos};
@@ -68,26 +68,36 @@ where
     lines.into_iter().map(move |line| (line, coarse))
 }
 
-// CompactLayout
+// Layout: CompactLayout & Row
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-pub struct CompactLayout(());
+pub struct CompactLayout(EvenlyArranged<Row>);
 
 impl CompactLayout {
-    /// Create a compact layout from redstone-tick-grouped notes.
     pub fn new<Trk, Chord>(
-        _notes: Trk,
-        _repeater_coarse: Option<NonZero<RedStoneTick>>,
-        _wrap_length: Option<NonZero<usize>>,
-        _gap: u32,
+        notes: Trk,
+        repeater_coarse: Option<NonZero<RedStoneTick>>,
+        wrap_length: Option<NonZero<usize>>,
+        gap: u32,
     ) -> Self
     where
         Trk: IntoIterator<Item = (RedStoneTick, Chord)>,
         Chord: IntoIterator,
         Chord::Item: Into<Tone>,
     {
-        todo!()
+        let width = 4 + gap as i32;
+        let coarse = repeater_coarse.map_or(Tick::MAX, NonZero::get);
+        let notes = notes
+            .into_iter()
+            .flat_map(|(tick, chord)| chord.into_iter().map(move |note| (tick, note.into())));
+        let mut events = Events::new(notes);
+        let mut rows = Vec::new();
+        while let Some(row) = Row::new(&mut events, width, coarse, wrap_length, rows.len() % 2 == 0)
+        {
+            rows.push(row);
+        }
+        Self(EvenlyArranged::new(rows, BlockPos::new(width - 2, 0, 0)))
     }
 }
 
@@ -97,7 +107,27 @@ impl AsLayout for CompactLayout {
     }
 }
 
-// Data container: Events
+struct Row(Overlaid<Turn, EvenlyArranged<Tile>>);
+
+impl Row {
+    fn new<I: Iterator<Item = (RedStoneTick, Tone)>>(
+        events: &mut Events<I>,
+        width: i32,
+        coarse: Tick,
+        wrap_length: Option<NonZero<usize>>,
+        south_bound: bool,
+    ) -> Option<Self> {
+        todo!()
+    }
+}
+
+impl AsLayout for Row {
+    fn as_layout(&self) -> &impl Layout {
+        &self.0
+    }
+}
+
+// Containers: Events
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 

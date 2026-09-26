@@ -81,7 +81,7 @@ impl AsLayout for StackedLinearLayout {
     }
 }
 
-// Structural layout: LinearLayout & Row
+// Layout: LinearLayout & Row
 //
 // The structural layout layer is the hierarchy that generates and organizes
 // layouts; it produces no blocks itself and only performs layout.
@@ -163,7 +163,7 @@ impl AsLayout for Row {
     }
 }
 
-// Data containers: Cells & ScaleMode
+// Containers: Cells & ScaleMode
 //
 // Data containers are a parallel layer to the structural layout, declaring a
 // data container suitable for consumption by the structural layout.
