@@ -126,6 +126,66 @@ enum Tile {
     },
 }
 
+impl Tile {
+    fn south_bound(&self) -> bool {
+        match *self {
+            Tile::Hold { south_bound, .. }
+            | Tile::Sink { south_bound, .. }
+            | Tile::Node { south_bound, .. }
+            | Tile::Port { south_bound, .. } => south_bound,
+        }
+    }
+
+    fn stem(&self) -> RedStoneTick {
+        match *self {
+            Tile::Hold { stem, .. } | Tile::Sink { stem, .. } | Tile::Port { stem, .. } => stem,
+            Tile::Node { .. } => 0,
+        }
+    }
+}
+
+impl Layout for Tile {
+    fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
+        use self::{Facing::*, Tile::*};
+        let south_bound = self.south_bound();
+        let local_z = if south_bound { pos.z } else { 1 - pos.z };
+        let facing = if south_bound { South } else { North };
+        let repeater = |delay: RedStoneTick| repeater(delay.to_string(), facing, false, false);
+        match (*self, local_z, pos.x, pos.y) {
+            // stem
+            (_, 0, 1, 0) => Some(chain_block()),
+            (_, 0, 1, 1) if self.stem() == 0 => Some(redstone_wire()),
+            (_, 0, 1, 1) => Some(repeater(self.stem())),
+
+            // cap: hold
+            (Hold { .. }, 1, 1, 0) => Some(chain_block()),
+            (Hold { cap, .. }, 1, 1, 1) => Some(repeater(cap)),
+
+            // cap: node
+            (Node { .. } | Port { .. }, 1, 1, 0 | 1) => Some(chain_block()),
+            (Node { .. } | Port { .. }, 1, 1, 2) => Some(redstone_wire()),
+            (Node { cap, .. } | Port { cap, .. }, 1, 0, 0) => Some(inst_block(cap[0], air)),
+            (Node { cap, .. } | Port { cap, .. }, 1, 0, 1) => Some(note_block(cap[0], air)),
+            (Node { cap, .. } | Port { cap, .. }, 1, 2, 0) => Some(inst_block(cap[1], air)),
+            (Node { cap, .. } | Port { cap, .. }, 1, 2, 1) => Some(note_block(cap[1], air)),
+
+            // cap: sink
+            (Sink { cap, .. }, 1, 1, 0) => Some(inst_block(cap[0], chain_block)),
+            (Sink { cap, .. }, 1, 1, 1) => Some(note_block(cap[0], chain_block)),
+            (Sink { cap, .. }, 1, 0, 0) => Some(inst_block(cap[1], air)),
+            (Sink { cap, .. }, 1, 0, 1) => Some(note_block(cap[1], air)),
+            (Sink { cap, .. }, 1, 2, 0) => Some(inst_block(cap[2], air)),
+            (Sink { cap, .. }, 1, 2, 1) => Some(note_block(cap[2], air)),
+
+            _ => None,
+        }
+    }
+
+    fn size(&self) -> BlockPos {
+        BlockPos::new(3, 3, 2)
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Turn {
     Sink {
@@ -160,15 +220,18 @@ impl Layout for Turn {
         let local_x = self.width() - 1 - pos.x;
         let repeater = || repeater(self.stem().to_string(), East, false, false);
         match (*self, local_x, pos.y) {
+            // stem
             (_, 2, 1) if self.stem() > 0 => Some(repeater()),
             (_, 2.., 0) => Some(chain_block()),
             (_, 2.., 1) => Some(redstone_wire()),
 
+            // cap: sink
             (Sink { cap, .. }, 1, 0) => Some(inst_block(cap[0], chain_block)),
             (Sink { cap, .. }, 1, 1) => Some(note_block(cap[0], chain_block)),
             (Sink { cap, .. }, 0, 0) => Some(inst_block(cap[1], air)),
             (Sink { cap, .. }, 0, 1) => Some(note_block(cap[1], air)),
 
+            // cap: node
             (Node { .. }, 1, 0 | 1) => Some(chain_block()),
             (Node { .. }, 1, 2) => Some(redstone_wire()),
             (Node { cap, .. }, 0, 0) => Some(inst_block(cap, air)),
