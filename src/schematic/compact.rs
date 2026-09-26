@@ -104,8 +104,64 @@ impl Row {
         south_bound: bool,
     ) -> Option<Self> {
         let len = wrap_length.map_or(usize::MAX, NonZero::get);
+        let closing = len == 1;
 
-        let turn: Turn = todo!();
+        let (wait, available) = events.pending()?;
+        let terminal = !closing && (wait > 0 || available <= 2);
+        let bought = match wait > 0 {
+            true => buy(coarse, false, wait, true, closing),
+            false => None,
+        };
+        let turn = match bought {
+            Some((stem, _, spent)) => {
+                for _ in 0..spent {
+                    let event = events.next();
+                    debug_assert!(matches!(event, Some(Event::Wait)));
+                }
+                match terminal {
+                    true => Turn::Sink {
+                        width,
+                        stem,
+                        cap: [None; 2],
+                    },
+                    false => Turn::Node {
+                        width,
+                        stem,
+                        cap: None,
+                    },
+                }
+            }
+            None => {
+                for _ in 0..wait {
+                    let event = events.next();
+                    debug_assert!(matches!(event, Some(Event::Wait)));
+                }
+                match terminal {
+                    true => {
+                        let mut cap = [None; 2];
+                        for slot in cap.iter_mut().take(available.min(2)) {
+                            *slot = match events.next() {
+                                Some(Event::Note(note)) => Some(note),
+                                _ => unreachable!(),
+                            };
+                        }
+                        Turn::Sink {
+                            width,
+                            stem: wait,
+                            cap,
+                        }
+                    }
+                    false => Turn::Node {
+                        width,
+                        stem: wait,
+                        cap: match events.next() {
+                            Some(Event::Note(note)) => Some(note),
+                            _ => unreachable!(),
+                        },
+                    },
+                }
+            }
+        };
 
         let mut column = 1;
         let mut tiles = iter::from_fn(|| {
@@ -135,6 +191,62 @@ impl AsLayout for Row {
     }
 }
 
+// Spending waits
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+fn buy(
+    coarse: Tick,
+    chained: bool,
+    wait: RedStoneTick,
+    opening: bool,
+    closing: bool,
+) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
+    debug_assert!(!((2..=4).contains(&coarse) && chained && opening));
+    debug_assert!(!(coarse == 1 && chained));
+
+    match coarse {
+        2..=4 => micro(coarse, chained, opening, closing, wait).or_else(|| free(opening, wait)),
+        1 => pulse(chained, wait).or_else(|| free(opening, wait)),
+        _ => free(opening, wait),
+    }
+}
+
+fn micro(
+    coarse: Tick,
+    chained: bool,
+    opening: bool,
+    closing: bool,
+    wait: RedStoneTick,
+) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
+    let series = |stem: Tick, cap: Tick| Some((stem, cap, stem + cap));
+    match (chained, opening, closing) {
+        (false, false, _) if wait == coarse * 3 => series(coarse, 0),
+        (_, false, false) if wait > coarse * 2 => series(coarse, coarse),
+        (true, false, _) if wait == coarse * 2 => series(coarse, 1),
+        (true, false, _) if wait >= coarse => series(coarse - 1, 0),
+        (false, false, _) if wait > coarse => series(coarse, 0),
+        (false, true, _) if wait > coarse => series(coarse, 0),
+        _ => None,
+    }
+}
+
+fn pulse(chained: bool, wait: RedStoneTick) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
+    match (chained, wait) {
+        (false, wait) if wait > 1 => Some((1, 0, 1)),
+        _ => None,
+    }
+}
+
+fn free(opening: bool, wait: RedStoneTick) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
+    match (opening, wait) {
+        (true, wait) if wait > 4 => Some((4, 0, 4)),
+        (false, wait) if wait > 8 => Some((4, 4, 8)),
+        (false, wait) if wait > 4 => Some((4, 0, 4)),
+        _ => None,
+    }
+}
+
 // Containers: Events
 //
 // ++++++++++++============++++++++++++============++++++++++++============
@@ -151,20 +263,31 @@ struct Events<I: Iterator> {
     cache: Vec<Tone>,
 }
 
-impl<I: Iterator> Events<I> {
+impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Events<I> {
     fn new(notes: I) -> Self {
-        Self {
+        let mut this = Self {
             notes: notes.peekable(),
             last: RedStoneTick::MAX,
             wait: 0,
             cache: Vec::new(),
-        }
+        };
+        this.refresh();
+        this
     }
 }
 
 impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Events<I> {
-    fn current(&self) -> Option<(RedStoneTick, &[Tone])> {
-        (!self.cache.is_empty()).then(|| (self.wait, self.cache.as_slice()))
+    fn pending(&self) -> Option<(RedStoneTick, usize)> {
+        (!self.cache.is_empty()).then_some((self.wait, self.cache.len()))
+    }
+
+    fn refresh(&mut self) -> Option<()> {
+        debug_assert!(self.cache.is_empty() && self.wait == 0);
+        let (tick, notes) = Self::load(&mut self.notes)?;
+        self.wait = tick.wrapping_sub(self.last);
+        self.last = tick;
+        self.cache.extend(notes);
+        Some(())
     }
 
     fn load(notes: &mut Peekable<I>) -> Option<(RedStoneTick, impl Iterator<Item = Tone> + '_)> {
@@ -178,19 +301,17 @@ impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Iterator for Events<I
     type Item = Event;
 
     fn next(&mut self) -> Option<Event> {
-        if self.cache.is_empty() {
-            debug_assert_eq!(self.wait, 0);
-            let (tick, notes) = Self::load(&mut self.notes)?;
-            self.wait = tick.wrapping_sub(self.last);
-            self.last = tick;
-            self.cache.extend(notes);
-        }
-        if self.wait == 0 {
-            self.cache.pop().map(Event::Note)
-        } else {
+        if self.wait > 0 {
             self.wait -= 1;
-            Some(Event::Wait)
+            return Some(Event::Wait);
         }
+        let Some(note) = self.cache.pop() else {
+            return None;
+        };
+        if self.cache.is_empty() {
+            self.refresh();
+        }
+        Some(Event::Note(note))
     }
 }
 
@@ -294,6 +415,7 @@ enum Turn {
     },
     Node {
         width: i32,
+        stem: RedStoneTick,
         cap: Option<Tone>,
     },
 }
@@ -307,8 +429,7 @@ impl Turn {
 
     fn stem(&self) -> RedStoneTick {
         match *self {
-            Turn::Sink { stem, .. } => stem,
-            Turn::Node { .. } => 0,
+            Turn::Sink { stem, .. } | Turn::Node { stem, .. } => stem,
         }
     }
 }
