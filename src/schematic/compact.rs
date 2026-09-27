@@ -106,24 +106,14 @@ impl Row {
         south_bound: bool,
     ) -> Option<Self> {
         let len = wrap_length.map_or(usize::MAX, NonZero::get);
-        let (turn, mut terminal) = turn(events, width, coarse, len == 1)?;
-
-        let mut chained = false;
-        let mut tiles = Vec::new();
-        for column in 1..len {
-            let closing = column + 1 == len;
-            let Some((tile, state)) = tile(events, coarse, closing, chained, terminal, south_bound)
-            else {
-                break;
-            };
-            chained = matches!(tile, Tile::Hold { cap, .. } if cap == coarse);
-            terminal = state;
-            tiles.push(tile);
-        }
+        let mut emitter = Emitter::new(events, coarse, width, south_bound);
+        let turn = emitter.turn(len == 1)?;
+        let tiles: Vec<Tile> = (1..len)
+            .map_while(|column| emitter.tile(column + 1 == len))
+            .collect();
 
         let depth = wrap_length.map_or(tiles.len() + 1, NonZero::get);
-        let southing = 2 * depth as i32;
-        let size = BlockPos::new(width, 3, southing);
+        let size = BlockPos::new(width, 3, 2 * depth as i32);
         let pitch = if south_bound { 2 } else { -2 };
         let rest = EvenlyArranged::new(tiles, BlockPos::new(0, 0, pitch));
         let turn_at = BlockPos::new(0, 0, if south_bound { 0 } else { -1 });
@@ -138,142 +128,135 @@ impl AsLayout for Row {
     }
 }
 
-// Generation: Turn & Tile
+// Emitting: Emitter
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-fn turn<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
-    events: &mut Events<I>,
-    width: i32,
+struct Emitter<'a, I: Iterator> {
+    events: &'a mut Events<I>,
     coarse: Tick,
-    closing: bool,
-) -> Option<(Turn, bool)> {
-    let (wait, count) = events.pending()?;
-    let terminal = !closing && (wait > 0 || count <= 2);
-    let bought = match (coarse, wait) {
-        (c @ 2..=4, w) if w > c => Some(c),
-        (1, w) if w > 1 => Some(1),
-        (_, w) if w > 4 => Some(4),
-        _ => None,
-    };
-    let stem = bought.unwrap_or(wait);
-    for _ in 0..stem {
-        let event = events.next();
-        debug_assert!(matches!(event, Some(Event::Wait)));
+    width: i32,
+    south_bound: bool,
+    terminal: bool,
+    chained: bool,
+}
+
+impl<'a, I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Emitter<'a, I> {
+    fn new(events: &'a mut Events<I>, coarse: Tick, width: i32, south_bound: bool) -> Self {
+        Self {
+            events,
+            coarse,
+            width,
+            south_bound,
+            terminal: false,
+            chained: false,
+        }
     }
-    let turn = if bought.is_some() {
-        if terminal {
+
+    fn turn(&mut self, closing: bool) -> Option<Turn> {
+        let (wait, count) = self.events.pending()?;
+        let terminal = !closing && (wait > 0 || count <= 2);
+        let bought = match (self.coarse, wait) {
+            (c @ 2..=4, w) if w > c => Some(c),
+            (1, w) if w > 1 => Some(1),
+            (_, w) if w > 4 => Some(4),
+            _ => None,
+        };
+        let stem = bought.unwrap_or(wait);
+        self.events.take_waits(stem);
+        let turn = if bought.is_some() {
+            if terminal {
+                Turn::Sink {
+                    width: self.width,
+                    stem,
+                    cap: [None; 2],
+                }
+            } else {
+                Turn::Node {
+                    width: self.width,
+                    stem,
+                    cap: None,
+                }
+            }
+        } else if terminal {
             Turn::Sink {
-                width,
+                width: self.width,
                 stem,
-                cap: [None; 2],
+                cap: self.load(count),
             }
         } else {
             Turn::Node {
-                width,
+                width: self.width,
                 stem,
-                cap: None,
+                cap: Some(self.events.take_note()),
             }
-        }
-    } else if terminal {
-        let mut cap = [None; 2];
-        for slot in cap.iter_mut().take(count.min(2)) {
-            *slot = Some(match events.next() {
-                Some(Event::Note(note)) => note,
-                _ => unreachable!(),
-            });
-        }
-        Turn::Sink { width, stem, cap }
-    } else {
-        Turn::Node {
-            width,
-            stem,
-            cap: Some(match events.next() {
-                Some(Event::Note(note)) => note,
-                _ => unreachable!(),
-            }),
-        }
-    };
-    let terminal = matches!(turn, Turn::Sink { .. });
-    Some((turn, terminal))
-}
-
-fn tile<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
-    events: &mut Events<I>,
-    coarse: Tick,
-    closing: bool,
-    chained: bool,
-    terminal: bool,
-    south_bound: bool,
-) -> Option<(Tile, bool)> {
-    debug_assert!(!(coarse == 1 && chained));
-
-    let (wait, count) = events.pending()?;
-    let fed = !terminal;
-    let terminal = !closing && (wait > 0 || (count <= 3 && fed));
-    let bought = match (coarse, chained, closing, wait) {
-        (c @ 2..=4, false, _, w) if w == c * 3 => Some((c, 0)),
-        (c @ 2..=4, _, false, w) if w > c * 2 => Some((c, c)),
-        (c @ 2..=4, true, _, w) if w == c * 2 => Some((c, 1)),
-        (c @ 2..=4, true, _, w) if w >= c => Some((c - 1, 0)),
-        (c @ 2..=4, false, _, w) if w > c => Some((c, 0)),
-        (1, false, _, w) if w > 1 => Some((1, 0)),
-        (_, false, _, w) if w > 8 => Some((4, 4)),
-        (_, false, _, w) if w > 4 => Some((4, 0)),
-        _ => None,
-    };
-    let (stem, delay) = bought.unwrap_or((wait, 0));
-    for _ in 0..stem + delay {
-        let event = events.next();
-        debug_assert!(matches!(event, Some(Event::Wait)));
+        };
+        self.terminal = matches!(turn, Turn::Sink { .. });
+        Some(turn)
     }
-    let tile = if bought.is_some() {
-        match (delay > 0, closing) {
-            (true, _) => Tile::Hold {
+
+    fn tile(&mut self, closing: bool) -> Option<Tile> {
+        debug_assert!(!(self.coarse == 1 && self.chained));
+
+        let (wait, count) = self.events.pending()?;
+        let fed = !self.terminal;
+        let terminal = !closing && (wait > 0 || (count <= 3 && fed));
+        let bought = match (self.coarse, self.chained, closing, wait) {
+            (c @ 2..=4, false, _, w) if w == c * 3 => Some((c, 0)),
+            (c @ 2..=4, _, false, w) if w > c * 2 => Some((c, c)),
+            (c @ 2..=4, true, _, w) if w == c * 2 => Some((c, 1)),
+            (c @ 2..=4, true, _, w) if w >= c => Some((c - 1, 0)),
+            (c @ 2..=4, false, _, w) if w > c => Some((c, 0)),
+            (1, false, _, w) if w > 1 => Some((1, 0)),
+            (_, false, _, w) if w > 8 => Some((4, 4)),
+            (_, false, _, w) if w > 4 => Some((4, 0)),
+            _ => None,
+        };
+        let (stem, delay) = bought.unwrap_or((wait, 0));
+        self.events.take_waits(stem + delay);
+        let tile = if bought.is_some() {
+            match (delay > 0, closing) {
+                (true, _) => Tile::Hold {
+                    stem,
+                    cap: delay,
+                    south_bound: self.south_bound,
+                },
+                (false, true) => Tile::Node {
+                    stem,
+                    cap: [None; 2],
+                    south_bound: self.south_bound,
+                },
+                (false, false) => Tile::Sink {
+                    stem,
+                    cap: [None; 3],
+                    south_bound: self.south_bound,
+                },
+            }
+        } else if terminal {
+            Tile::Sink {
                 stem,
-                cap: delay,
-                south_bound,
-            },
-            (false, true) => Tile::Node {
+                cap: self.load(count),
+                south_bound: self.south_bound,
+            }
+        } else {
+            Tile::Node {
                 stem,
-                cap: [None; 2],
-                south_bound,
-            },
-            (false, false) => Tile::Sink {
-                stem,
-                cap: [None; 3],
-                south_bound,
-            },
+                cap: self.load(count),
+                south_bound: self.south_bound,
+            }
+        };
+        self.terminal = matches!(tile, Tile::Sink { .. });
+        self.chained = matches!(tile, Tile::Hold { cap, .. } if cap == self.coarse);
+        Some(tile)
+    }
+
+    fn load<const N: usize>(&mut self, count: usize) -> [Option<Tone>; N] {
+        let mut cap = [None; N];
+        for slot in cap.iter_mut().take(count.min(N)) {
+            *slot = Some(self.events.take_note());
         }
-    } else if terminal {
-        let mut cap = [None; 3];
-        for slot in cap.iter_mut().take(count.min(3)) {
-            *slot = Some(match events.next() {
-                Some(Event::Note(note)) => note,
-                _ => unreachable!(),
-            });
-        }
-        Tile::Sink {
-            stem,
-            cap,
-            south_bound,
-        }
-    } else {
-        let mut cap = [None; 2];
-        for slot in cap.iter_mut().take(count.min(2)) {
-            *slot = Some(match events.next() {
-                Some(Event::Note(note)) => note,
-                _ => unreachable!(),
-            });
-        }
-        Tile::Node {
-            stem,
-            cap,
-            south_bound,
-        }
-    };
-    let terminal = matches!(tile, Tile::Sink { .. });
-    Some((tile, terminal))
+        cap
+    }
 }
 
 // Containers: Events
@@ -308,6 +291,20 @@ impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Events<I> {
 impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Events<I> {
     fn pending(&self) -> Option<(RedStoneTick, usize)> {
         (!self.cache.is_empty()).then_some((self.wait, self.cache.len()))
+    }
+
+    fn take_waits(&mut self, ticks: RedStoneTick) {
+        for _ in 0..ticks {
+            let event = self.next();
+            debug_assert!(matches!(event, Some(Event::Wait)));
+        }
+    }
+
+    fn take_note(&mut self) -> Tone {
+        match self.next() {
+            Some(Event::Note(note)) => note,
+            _ => unreachable!(),
+        }
     }
 
     fn refresh(&mut self) -> Option<()> {
