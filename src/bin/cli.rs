@@ -73,7 +73,7 @@ impl Compact {
         let tracks = std::iter::once((notes, NonZero::new(self.coarse)));
         let layout =
             MultiCompactLayout::new(tracks, NonZero::new(self.wrap), self.gap, self.full_floor);
-        let description = format!("Sectional from {}", self.input);
+        let description = format!("Compact from {}", self.input);
         let litematic = build_schematic(layout, Floor::None, description);
         write_output(&self.output, litematic);
     }
@@ -91,14 +91,14 @@ struct Linear {
     /// Path to output litematic file
     #[arg(default_value = "out/generated_linear.litematic")]
     output: String,
-    /// Block spacing between adjacent tracks
+    /// Block spacing between adjacent tracks (0 = interlocked)
     #[arg(short, long, default_value_t = 0)]
     gap: u32,
     /// Max columns per row before wrapping (0 = no wrap)
     #[arg(short, long, default_value_t = 0)]
-    wrap: u32,
+    wrap: usize,
     /// Floor platform mode
-    #[arg(short, long, value_enum, default_value_t)]
+    #[arg(short = 'F', long, value_enum, default_value_t)]
     floor: Floor,
 }
 
@@ -111,7 +111,7 @@ impl Linear {
             .map(|(pos, _)| pos.into_tick() + 1)
             .unwrap_or(0);
         let tracks: Vec<Notes> = notes.split_by_layer_gaps();
-        let description = format!("Sectional from {}", self.input);
+        let description = format!("Linear from {}", self.input);
 
         let litematic = if let Some(wrap) = NonZero::new(self.wrap) {
             let layout = StackedLinearLayout::new(
@@ -150,6 +150,9 @@ struct Decompose {
     /// Max columns per row before wrapping (0 = no wrap)
     #[arg(short, long, default_value_t = 16)]
     wrap: usize,
+    /// Block spacing between adjacent rows (0 = interlocked)
+    #[arg(short, long, default_value_t = 0)]
+    gap: u32,
     /// Add a full floor platform below the build
     #[arg(short, long)]
     full_floor: bool,
@@ -176,6 +179,7 @@ impl Decompose {
         let layout = TappedLayout::new(
             tecs.into_iter().map(BoundedTec::new),
             NonZero::new(self.wrap),
+            self.gap,
             self.full_floor,
         );
         let description = format!("Tapped from {}", self.input);
@@ -199,9 +203,12 @@ struct Match {
     /// Match rule offsets, slash-separated; multiple rules in order
     #[arg(short, long, num_args = 1..)]
     rules: Vec<Rule>,
-    /// Max tiles per row before wrapping (0 = no wrap)
+    /// Max columns per row before wrapping (0 = no wrap)
     #[arg(short, long, default_value_t = 16)]
     wrap: usize,
+    /// Block spacing between adjacent rows (0 = interlocked)
+    #[arg(short, long, default_value_t = 0)]
+    gap: u32,
     /// Add a full floor platform below the build
     #[arg(short, long)]
     full_floor: bool,
@@ -233,7 +240,7 @@ impl Match {
             tecs.push(BoundedTec::new(TransEqClass::new(offsets, residual)));
         }
 
-        let layout = TappedLayout::new(tecs, NonZero::new(self.wrap), self.full_floor);
+        let layout = TappedLayout::new(tecs, NonZero::new(self.wrap), self.gap, self.full_floor);
         let description = format!("Match from {}", self.input);
         let litematic = build_schematic(layout, Floor::None, description);
         write_output(&self.output, litematic);
