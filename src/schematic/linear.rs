@@ -1,12 +1,13 @@
 //! Linear time-proportional layout for NBS song projection.
 
-use super::{AsLayout, EvenlyArranged, Facing, Layout, Overlaid};
+use super::{AsLayout, Clipped, EvenlyArranged, Facing, Layout, Overlaid};
 use super::{WithFloor, air, chain_block, inst_block, note_block};
 use super::{redstone_block, repeater, sticky_piston};
 use crate::schematic::{WireConn, wire_state};
 use mcdata::{GenericBlockState, util::BlockPos};
 use rsnbs::note::Tone;
 use rsnbs::types::{Tick, TimeAnchor};
+use std::iter::from_fn;
 use std::num::NonZero;
 use std::vec::IntoIter as VecIter;
 
@@ -68,7 +69,7 @@ impl StackedLinearLayout {
         let layouts = tracks.into_iter().flat_map(|notes| {
             let cells = Cells::new(notes, scale, song_length);
             let layer = LinearLayout::new(cells, scale, wrap_length, gap);
-            layer.into_iter().map(|layout| WithFloor::new(layout, full))
+            layer.map(|layout| WithFloor::new(layout, full))
         });
         let pitch = BlockPos::new(0, 4, 0);
         Self(EvenlyArranged::new(layouts, pitch))
@@ -89,7 +90,7 @@ impl AsLayout for StackedLinearLayout {
 // ++++++++++++============++++++++++++============++++++++++++============
 
 /// A zigzag linear layout for one track.
-pub struct LinearLayout(EvenlyArranged<Row>);
+pub struct LinearLayout(Clipped<EvenlyArranged<Row>>);
 
 impl LinearLayout {
     /// Lays a pre-filed cell container out into lanes.
@@ -98,23 +99,22 @@ impl LinearLayout {
         scale: ScaleMode,
         wrap_length: Option<NonZero<Tick>>,
         gap: u32,
-    ) -> Vec<Self> {
+    ) -> impl Iterator<Item = Self> {
         let width = scale.width() + gap as i32 + 1;
         let row_length = wrap_length.map_or(cells.len(), |w| w.get() as usize);
-
-        let mut lanes: Vec<Vec<Row>> = Vec::new();
-        while cells.has_notes() {
-            let lane = (0..cells.len()).step_by(row_length).map(|start| {
+        let pitch = BlockPos::new(width - 2, 0, 0);
+        let clip = BlockPos::new(width - scale.width(), 0, 0);
+        from_fn(move || {
+            if !cells.has_notes() {
+                return None;
+            }
+            let rows = (0..cells.len()).step_by(row_length).map(|start| {
                 let index = start / row_length;
                 let region = cells.window(start, row_length);
                 Row::new(region, scale, width, index > 0, index % 2 == 0, row_length)
             });
-            lanes.push(lane.collect());
-        }
-        lanes
-            .into_iter()
-            .map(|rows| Self(EvenlyArranged::new(rows, BlockPos::new(width - 2, 0, 0))))
-            .collect()
+            Some(Self(Clipped::new(EvenlyArranged::new(rows, pitch), clip)))
+        })
     }
 }
 

@@ -186,17 +186,17 @@ pub fn reuse_flow<E: Event>(
         };
         // Non-AP candidates die on this threshold (sup anti-monotone class).
         let threshold = max_support / (max_len - 1);
-        let candidates: Vec<Tick> = support
+        let mut candidates = support
             .iter()
             .filter(|&(_, &value)| value > threshold)
             .map(|(&offset, _)| offset)
-            .collect();
-        if candidates.is_empty() {
+            .peekable();
+        if candidates.peek().is_none() {
             break;
         }
 
         let mut best: Option<((isize, usize, Reverse<Tick>), Vec<TransEqClass<E>>)> = None;
-        for &d in &candidates {
+        for d in candidates {
             let budget = max_layers - plan.len();
             let (total, layers, penalty) = family_deep_first(&residual, d, max_len, budget);
             if total <= 0 {
