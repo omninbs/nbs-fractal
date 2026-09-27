@@ -52,7 +52,7 @@ impl StackedLinearLayout {
     /// Create a stacked linear layout from per-track notes.
     pub fn new<Trks, Trk, A, T>(
         tracks: Trks,
-        wrap_length: Option<NonZero<Tick>>,
+        wrap_length: Option<NonZero<usize>>,
         gap: u32,
         full: bool,
         song_length: Tick,
@@ -97,11 +97,11 @@ impl LinearLayout {
     pub(crate) fn new(
         mut cells: Cells,
         scale: ScaleMode,
-        wrap_length: Option<NonZero<Tick>>,
+        wrap_length: Option<NonZero<usize>>,
         gap: u32,
     ) -> impl Iterator<Item = Self> {
         let width = scale.width() + gap as i32 + 1;
-        let row_length = wrap_length.map_or(cells.len(), |w| w.get() as usize);
+        let row_length = wrap_length.map_or(cells.len(), NonZero::get);
         let pitch = BlockPos::new(width - 2, 0, 0);
         let clip = BlockPos::new(width - scale.width(), 0, 0);
         from_fn(move || {

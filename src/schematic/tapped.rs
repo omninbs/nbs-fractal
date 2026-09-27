@@ -30,6 +30,7 @@ impl TappedLayout {
     pub fn new<I: IntoIterator<Item = BoundedTec<Tone>>>(
         tecs: I,
         wrap_length: Option<NonZero<usize>>,
+        gap: u32,
         full: bool,
     ) -> Self {
         let tecs: Vec<BoundedTec<Tone>> = tecs.into_iter().collect();
@@ -50,7 +51,7 @@ impl TappedLayout {
                         .into_iter()
                         .map(move |tone| (tick + 2 * lyr as u32, tone))
                 });
-            let layout = CompactLayout::new(notes, repeater_coarse, wrap_length, 0);
+            let layout = CompactLayout::new(notes, repeater_coarse, wrap_length, gap);
 
             // the bottom line carries the switch
             let switch = lyr + 1 == count;
