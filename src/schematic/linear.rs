@@ -7,6 +7,7 @@ use crate::schematic::{WireConn, wire_state};
 use mcdata::{GenericBlockState, util::BlockPos};
 use rsnbs::note::Tone;
 use rsnbs::types::{Tick, TimeAnchor};
+use std::iter::from_fn;
 use std::num::NonZero;
 use std::vec::IntoIter as VecIter;
 
@@ -68,7 +69,7 @@ impl StackedLinearLayout {
         let layouts = tracks.into_iter().flat_map(|notes| {
             let cells = Cells::new(notes, scale, song_length);
             let layer = LinearLayout::new(cells, scale, wrap_length, gap);
-            layer.into_iter().map(|layout| WithFloor::new(layout, full))
+            layer.map(|layout| WithFloor::new(layout, full))
         });
         let pitch = BlockPos::new(0, 4, 0);
         Self(EvenlyArranged::new(layouts, pitch))
@@ -98,25 +99,22 @@ impl LinearLayout {
         scale: ScaleMode,
         wrap_length: Option<NonZero<Tick>>,
         gap: u32,
-    ) -> Vec<Self> {
+    ) -> impl Iterator<Item = Self> {
         let width = scale.width() + gap as i32 + 1;
         let row_length = wrap_length.map_or(cells.len(), |w| w.get() as usize);
-
-        let mut lanes: Vec<Vec<Row>> = Vec::new();
-        while cells.has_notes() {
-            let lane = (0..cells.len()).step_by(row_length).map(|start| {
+        let pitch = BlockPos::new(width - 2, 0, 0);
+        let clip = BlockPos::new(width - scale.width(), 0, 0);
+        from_fn(move || {
+            if !cells.has_notes() {
+                return None;
+            }
+            let rows = (0..cells.len()).step_by(row_length).map(|start| {
                 let index = start / row_length;
                 let region = cells.window(start, row_length);
                 Row::new(region, scale, width, index > 0, index % 2 == 0, row_length)
             });
-            lanes.push(lane.collect());
-        }
-        let pitch = BlockPos::new(width - 2, 0, 0);
-        let clip = BlockPos::new(width - scale.width(), 0, 0);
-        lanes
-            .into_iter()
-            .map(|rows| Self(Clipped::new(EvenlyArranged::new(rows, pitch), clip)))
-            .collect()
+            Some(Self(Clipped::new(EvenlyArranged::new(rows, pitch), clip)))
+        })
     }
 }
 

@@ -203,14 +203,13 @@ impl<E: Event> BoundedTec<E> {
     /// backward, so the frontier advances monotonically. Does not apply to
     /// cyclic spaces where the axis wraps around.
     pub fn extract_from(source: &mut TePlane<E>, scatter: BTreeSet<NonZero<Tick>>) -> Self {
-        let offsets: Vec<Tick> = scatter.iter().map(|o| o.get()).collect();
         let TePlane(inner) = std::mem::take(source);
         let mut plane: BTreeMap<Point<E>, usize> = FromIterator::from_iter(inner);
 
         let mut kernel = TePlane::default();
         while let Some(((tick, event), capacity)) = plane.pop_first() {
-            let slots = offsets.iter().map(|&offset| {
-                let cap = plane.get(&(tick + offset, event));
+            let slots = scatter.iter().map(|offset| {
+                let cap = plane.get(&(tick + offset.get(), event));
                 cap.copied().unwrap_or(0)
             });
             let base = slots.fold(capacity, usize::min);
@@ -221,8 +220,8 @@ impl<E: Event> BoundedTec<E> {
             if base == 0 {
                 continue;
             }
-            for &offset in &offsets {
-                *plane.get_mut(&(tick + offset, event)).unwrap() -= base;
+            for offset in &scatter {
+                *plane.get_mut(&(tick + offset.get(), event)).unwrap() -= base;
             }
             let anchor = kernel.entry((tick, event));
             anchor.and_modify(|mult| *mult += base).or_insert(base);
