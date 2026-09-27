@@ -156,15 +156,10 @@ impl<'a, I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Emitter<'a, I> {
     fn turn(&mut self, closing: bool) -> Option<Turn> {
         let (wait, count) = self.events.pending()?;
         let terminal = !closing && (wait > 0 || count <= 2);
-        let bought = match (self.coarse, wait) {
-            (c @ 1..=4, w) if w > c => Some(c),
-            (_, w) if w > 4 => Some(4),
-            _ => None,
-        };
-        let stem = bought.unwrap_or(wait);
+        let stem = wait.min(self.coarse.min(4));
         self.events.take_waits(stem);
         let width = self.width;
-        let turn = match (terminal, bought.is_some()) {
+        let turn = match (terminal, wait > stem) {
             (true, true) => Turn::sink(width, stem, [None; 2]),
             (true, false) => Turn::sink(width, stem, self.load(count)),
             (false, true) => Turn::node(width, stem, None),
@@ -178,27 +173,25 @@ impl<'a, I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Emitter<'a, I> {
         debug_assert!(!(self.coarse == 1 && self.chained));
 
         let (wait, count) = self.events.pending()?;
-        let fed = !self.terminal;
-        let terminal = !closing && (wait > 0 || (count <= 3 && fed));
-        let bought = match (self.coarse, self.chained, closing, wait) {
-            (c @ 2..=4, false, _, w) if w == c * 3 => Some((c, 0)),
-            (c @ 2..=4, _, false, w) if w > c * 2 => Some((c, c)),
-            (c @ 2..=4, true, _, w) if w == c * 2 => Some((c, 1)),
-            (c @ 2..=4, true, _, w) if w >= c => Some((c - 1, 0)),
-            (c @ 1..=4, false, _, w) if w > c => Some((c, 0)),
-            (_, false, _, w) if w > 8 => Some((4, 4)),
-            (_, false, _, w) if w > 4 => Some((4, 0)),
+        let terminal = !closing && (wait > 0 || (count <= 3 && !self.terminal));
+        let bought = match (self.coarse, self.chained, closing) {
+            (c @ 2..=4, false, _) if wait == c * 3 => Some((c, 0)),
+            (c @ 2..=4, _, false) if wait > c * 2 => Some((c, c)),
+            (c @ 2..=4, true, _) if wait == c * 2 => Some((c, 1)),
+            (c @ 2..=4, true, _) if wait >= c => Some((c - 1, 0)),
+            (c @ 1..=4, false, _) if wait > c => Some((c, 0)),
+            (_, false, _) if wait > 8 => Some((4, 4)),
+            (_, false, _) if wait > 4 => Some((4, 0)),
             _ => None,
         };
         let (stem, delay) = bought.unwrap_or((wait, 0));
         self.events.take_waits(stem + delay);
-        let south_bound = self.south_bound;
         let tile = match (bought.is_some(), delay > 0, terminal, closing) {
-            (_, true, _, _) => Tile::hold(stem, delay, south_bound),
-            (true, false, _, true) => Tile::node(stem, [None; 2], south_bound),
-            (true, false, _, false) => Tile::sink(stem, [None; 3], south_bound),
-            (false, false, true, _) => Tile::sink(stem, self.load(count), south_bound),
-            (false, false, false, _) => Tile::node(stem, self.load(count), south_bound),
+            (_, true, _, _) => Tile::hold(stem, delay, self.south_bound),
+            (true, false, _, true) => Tile::node(stem, [None; 2], self.south_bound),
+            (true, false, _, false) => Tile::sink(stem, [None; 3], self.south_bound),
+            (false, false, true, _) => Tile::sink(stem, self.load(count), self.south_bound),
+            (false, false, false, _) => Tile::node(stem, self.load(count), self.south_bound),
         };
         self.terminal = matches!(tile, Tile::Sink { .. });
         self.chained = matches!(tile, Tile::Hold { cap, .. } if cap == self.coarse);
