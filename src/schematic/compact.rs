@@ -1,65 +1,42 @@
 //! Compact note block layouts for NBS song projection.
 
-use super::{Arranged, AsLayout, Axis, Layout, chain_block, inst_block};
-use super::{Facing, air, note_block, redstone_wire, repeater};
+use super::{AsLayout, Clipped, EvenlyArranged, Facing, Layout, Overlaid, WithFloor};
+use super::{air, chain_block, inst_block, note_block, redstone_wire, repeater};
 use crate::{GameTick, RedStoneTick};
-use rsnbs::note::{Notes, Tone};
-use rsnbs::types::Tick;
 use mcdata::{GenericBlockState, util::BlockPos};
-use std::iter;
+use rsnbs::note::Tone;
+use rsnbs::types::Tick;
+use std::iter::{self, Peekable};
 use std::num::NonZero;
-use std::ops::{Deref, DerefMut};
 
-// MultiCompactLayout
+// Shell: MultiCompactLayout
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-/// Multiple compact note block tracks placed side-by-side.
-///
-/// Each song track is split into even/odd redstone tick sub-tracks,
-/// each built as a [`CompactLayout`], then arranged east-to-west
-/// with configurable spacing between song tracks.
-pub struct MultiCompactLayout(Arranged<CompactLayout>);
+/// One [`CompactLayout`] line per redstone sub-track, stacked vertically.
+pub struct MultiCompactLayout(EvenlyArranged<WithFloor<CompactLayout>>);
 
 impl MultiCompactLayout {
     /// Create a multi-track compact layout from multiple note groups.
-    pub fn new<Trks, Trk, Chord>(
+    pub fn new<Trks, Trk, T>(
         tracks: Trks,
         wrap_length: Option<NonZero<usize>>,
         gap: u32,
+        full: bool,
     ) -> Self
     where
         Trks: IntoIterator<Item = (Trk, Option<NonZero<RedStoneTick>>)>,
-        Trk: IntoIterator<Item = (GameTick, Chord)>,
-        Chord: IntoIterator,
-        Chord::Item: Into<Tone>,
+        Trk: IntoIterator<Item = (GameTick, T)>,
+        T: Into<Tone>,
     {
-        let layouts = tracks
+        let lines = tracks
             .into_iter()
-            .flat_map(|(notes, coarse)| Self::split_even_odd(notes, coarse))
-            .filter(|(notes, _)| !notes.is_empty())
-            .map(|(notes, coarse)| CompactLayout::new(notes, coarse, wrap_length));
-        Self(Arranged::new(layouts, Axis::Easting, gap))
-    }
-
-    /// Split game tick notes into even/odd redstone tick buckets.
-    fn split_even_odd<Trks, Chord>(
-        tracks: Trks,
-        coarse: Option<NonZero<Tick>>,
-    ) -> impl Iterator<Item = (Notes<RedStoneTick, Vec<Tone>>, Option<NonZero<Tick>>)>
-    where
-        Trks: IntoIterator<Item = (GameTick, Chord)>,
-        Chord: IntoIterator,
-        Chord::Item: Into<Tone>,
-    {
-        let mut buckets: [Notes<RedStoneTick, Vec<Tone>>; 2] = Default::default();
-        for (game_tick, notes) in tracks {
-            buckets[(game_tick.rem_euclid(2)) as usize]
-                .entry(game_tick / 2)
-                .or_default()
-                .extend(notes.into_iter().map(|n| n.into()));
-        }
-        buckets.into_iter().map(move |m| (m, coarse))
+            .flat_map(|(notes, coarse)| split_even_odd(notes, coarse));
+        let layers = lines.map(|(notes, coarse)| {
+            let line = CompactLayout::new(notes, coarse, wrap_length, gap);
+            WithFloor::new(line, full)
+        });
+        Self(EvenlyArranged::new(layers, BlockPos::new(0, 4, 0)))
     }
 }
 
@@ -69,347 +46,434 @@ impl AsLayout for MultiCompactLayout {
     }
 }
 
-// CompactLayout
+/// Splits game tick notes into even and odd redstone tick lines.
+fn split_even_odd<I: IntoIterator<Item = (GameTick, T)>, T: Into<Tone>>(
+    notes: I,
+    coarse: Option<NonZero<Tick>>,
+) -> impl Iterator<Item = (Vec<(RedStoneTick, Tone)>, Option<NonZero<Tick>>)> {
+    let mut lines: [Vec<(RedStoneTick, Tone)>; 2] = Default::default();
+    for (game_tick, note) in notes {
+        lines[(game_tick % 2) as usize].push((game_tick / 2, note.into()));
+    }
+    lines
+        .into_iter()
+        .filter(|line| !line.is_empty())
+        .map(move |line| (line, coarse))
+}
+
+// Layout: CompactLayout & Row
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-/// A single compact note block track.
-///
-/// One redstone sub-track's tiles arranged in a compact 3-high
-/// zigzag pattern with tooth-interlocked rows.
-pub struct CompactLayout {
-    track: Track,
-    easting: i32,
-    southing: i32,
-}
+pub struct CompactLayout(Clipped<EvenlyArranged<Row>>);
 
 impl CompactLayout {
-    const ELEVATION: i32 = 3;
-
-    /// Create a compact layout from redstone-tick-grouped notes.
-    ///
-    /// The input must already be split into a single redstone tick line.
-    /// See [`MultiCompactLayout`] for the high-level constructor that handles
-    /// the split automatically.
-    pub fn new<Trk, Chord>(
-        notes: Trk,
+    pub fn new<I: IntoIterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
+        notes: I,
         repeater_coarse: Option<NonZero<RedStoneTick>>,
         wrap_length: Option<NonZero<usize>>,
-    ) -> Self
-    where
-        Trk: IntoIterator<Item = (RedStoneTick, Chord)>,
-        Chord: IntoIterator,
-        Chord::Item: Into<Tone>,
-    {
-        let track = Track::new(notes, repeater_coarse, wrap_length);
-        let easting = (track.rows() as i32) * 2 + 1;
-        let southing = track.cols_or_len() as i32;
+        gap: u32,
+    ) -> Self {
+        let width = 4 + gap as i32;
+        let coarse = repeater_coarse.map_or(Tick::MAX, NonZero::get);
+        let mut events = Events::new(notes.into_iter());
+        let mut south_bound = false;
+        let rows = iter::from_fn(move || {
+            south_bound = !south_bound;
+            Row::new(&mut events, width, coarse, wrap_length, south_bound)
+        });
+        Self(Clipped::new(
+            EvenlyArranged::new(rows, BlockPos::new(width - 2, 0, 0)),
+            BlockPos::new(width - 3, 0, 0),
+        ))
+    }
+}
+
+impl AsLayout for CompactLayout {
+    fn as_layout(&self) -> &impl Layout {
+        &self.0
+    }
+}
+
+struct Row(Overlaid<Turn, EvenlyArranged<Tile>>);
+
+impl Row {
+    fn new<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
+        events: &mut Events<I>,
+        width: i32,
+        coarse: Tick,
+        wrap_length: Option<NonZero<usize>>,
+        south_bound: bool,
+    ) -> Option<Self> {
+        let len = wrap_length.map_or(usize::MAX, NonZero::get);
+        let mut emitter = Emitter::new(events, coarse, width, south_bound);
+        let turn = emitter.turn(len == 1)?;
+        let tiles: Vec<Tile> = (1..len)
+            .map_while(|column| emitter.tile(column + 1 == len))
+            .collect();
+
+        let depth = wrap_length.map_or(tiles.len() + 1, NonZero::get);
+        let size = BlockPos::new(width, 3, 2 * depth as i32);
+        let pitch = if south_bound { 2 } else { -2 };
+        let rest = EvenlyArranged::new(tiles, BlockPos::new(0, 0, pitch));
+        let turn_at = BlockPos::new(0, 0, if south_bound { 0 } else { -1 });
+        let tiles_at = BlockPos::new(-1, 0, if south_bound { 1 } else { -2 });
+        Some(Self(Overlaid::new(turn_at, turn, tiles_at, rest, size)))
+    }
+}
+
+impl AsLayout for Row {
+    fn as_layout(&self) -> &impl Layout {
+        &self.0
+    }
+}
+
+// Emitting: Emitter
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+struct Emitter<'a, I: Iterator> {
+    events: &'a mut Events<I>,
+    coarse: Tick,
+    width: i32,
+    south_bound: bool,
+    terminal: bool,
+    chained: bool,
+}
+
+impl<'a, I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Emitter<'a, I> {
+    fn new(events: &'a mut Events<I>, coarse: Tick, width: i32, south_bound: bool) -> Self {
         Self {
-            track,
-            easting,
-            southing,
+            events,
+            coarse,
+            width,
+            south_bound,
+            terminal: false,
+            chained: false,
+        }
+    }
+
+    fn turn(&mut self, closing: bool) -> Option<Turn> {
+        let (wait, count) = self.events.pending()?;
+        let terminal = !closing && (wait > 0 || count <= 2);
+        let stem = wait.min(self.coarse.min(4));
+        self.events.take_waits(stem);
+        let width = self.width;
+        let turn = match (terminal, wait > stem) {
+            (true, true) => Turn::sink(width, stem, [None; 2]),
+            (true, false) => Turn::sink(width, stem, self.load(count)),
+            (false, true) => Turn::node(width, stem, None),
+            (false, false) => Turn::node(width, stem, Some(self.events.take_note())),
+        };
+        self.terminal = matches!(turn, Turn::Sink { .. });
+        Some(turn)
+    }
+
+    fn tile(&mut self, closing: bool) -> Option<Tile> {
+        debug_assert!(!(self.coarse == 1 && self.chained));
+
+        let (wait, count) = self.events.pending()?;
+        let terminal = !closing && (wait > 0 || (count <= 3 && !self.terminal));
+        let bought = match (self.coarse, self.chained, closing) {
+            (c @ 2..=4, false, _) if wait == c * 3 => Some((c, 0)),
+            (c @ 2..=4, _, false) if wait > c * 2 => Some((c, c)),
+            (c @ 2..=4, true, _) if wait == c * 2 => Some((c, 1)),
+            (c @ 2..=4, true, _) if wait >= c => Some((c - 1, 0)),
+            (c @ 1..=4, false, _) if wait > c => Some((c, 0)),
+            (_, false, _) if wait > 8 => Some((4, 4)),
+            (_, false, _) if wait > 4 => Some((4, 0)),
+            _ => None,
+        };
+
+        let (stem, cap) = bought.unwrap_or((wait, 0));
+        self.events.take_waits(stem + cap);
+        let placed = bought.map_or(count, |_| 0);
+        let tile = match (cap > 0, terminal) {
+            (true, _) => Tile::hold(stem, cap, self.south_bound),
+            (false, true) => Tile::sink(stem, self.load(placed), self.south_bound),
+            (false, false) => Tile::node(stem, self.load(placed), self.south_bound),
+        };
+
+        self.terminal = matches!(tile, Tile::Sink { .. });
+        self.chained = matches!(tile, Tile::Hold { cap, .. } if cap == self.coarse);
+        Some(tile)
+    }
+
+    fn load<const N: usize>(&mut self, count: usize) -> [Option<Tone>; N] {
+        let mut cap = [None; N];
+        for slot in cap.iter_mut().take(count.min(N)) {
+            *slot = Some(self.events.take_note());
+        }
+        cap
+    }
+}
+
+// Containers: Events
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+struct Events<I: Iterator> {
+    notes: Peekable<I>,
+    last: RedStoneTick,
+    wait: RedStoneTick,
+    cache: Vec<Tone>,
+}
+
+enum Event {
+    Wait,
+    Note(Tone),
+}
+
+impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Events<I> {
+    fn new(notes: I) -> Self {
+        let mut this = Self {
+            notes: notes.peekable(),
+            last: RedStoneTick::MAX,
+            wait: 0,
+            cache: Vec::new(),
+        };
+        this.refresh();
+        this
+    }
+
+    fn pending(&self) -> Option<(RedStoneTick, usize)> {
+        (!self.cache.is_empty()).then_some((self.wait, self.cache.len()))
+    }
+
+    fn take_waits(&mut self, ticks: RedStoneTick) {
+        for _ in 0..ticks {
+            let event = self.next();
+            debug_assert!(matches!(event, Some(Event::Wait)));
+        }
+    }
+
+    fn take_note(&mut self) -> Tone {
+        match self.next() {
+            Some(Event::Note(note)) => note,
+            _ => unreachable!(),
+        }
+    }
+
+    fn refresh(&mut self) -> Option<()> {
+        debug_assert!(self.cache.is_empty() && self.wait == 0);
+        let (tick, notes) = Self::load(&mut self.notes)?;
+        self.wait = tick.wrapping_sub(self.last);
+        self.last = tick;
+        self.cache.extend(notes);
+        Some(())
+    }
+
+    fn load(notes: &mut Peekable<I>) -> Option<(RedStoneTick, impl Iterator<Item = Tone> + '_)> {
+        let (tick, note) = notes.next()?;
+        let rest = iter::from_fn(move || notes.next_if(|&(t, _)| t == tick).map(|(_, n)| n.into()));
+        Some((tick, iter::once(note.into()).chain(rest)))
+    }
+}
+
+impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Iterator for Events<I> {
+    type Item = Event;
+
+    fn next(&mut self) -> Option<Event> {
+        if self.wait > 0 {
+            self.wait -= 1;
+            return Some(Event::Wait);
+        }
+        let Some(note) = self.cache.pop() else {
+            return None;
+        };
+        if self.cache.is_empty() {
+            self.refresh();
+        }
+        Some(Event::Note(note))
+    }
+}
+
+// Templates: Tile & Turn
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+#[derive(Clone, Copy)]
+enum Tile {
+    Hold {
+        stem: RedStoneTick,
+        cap: RedStoneTick,
+        south_bound: bool,
+    },
+    Sink {
+        stem: RedStoneTick,
+        cap: [Option<Tone>; 3],
+        south_bound: bool,
+    },
+    Node {
+        stem: RedStoneTick,
+        cap: [Option<Tone>; 2],
+        south_bound: bool,
+    },
+}
+
+impl Tile {
+    fn south_bound(&self) -> bool {
+        match *self {
+            Tile::Hold { south_bound, .. }
+            | Tile::Sink { south_bound, .. }
+            | Tile::Node { south_bound, .. } => south_bound,
+        }
+    }
+
+    fn stem(&self) -> RedStoneTick {
+        match *self {
+            Tile::Hold { stem, .. } | Tile::Sink { stem, .. } | Tile::Node { stem, .. } => stem,
+        }
+    }
+
+    fn hold(stem: RedStoneTick, cap: RedStoneTick, south_bound: bool) -> Self {
+        Self::Hold {
+            stem,
+            cap,
+            south_bound,
+        }
+    }
+
+    fn sink(stem: RedStoneTick, cap: [Option<Tone>; 3], south_bound: bool) -> Self {
+        Self::Sink {
+            stem,
+            cap,
+            south_bound,
+        }
+    }
+
+    fn node(stem: RedStoneTick, cap: [Option<Tone>; 2], south_bound: bool) -> Self {
+        Self::Node {
+            stem,
+            cap,
+            south_bound,
         }
     }
 }
 
-impl Layout for CompactLayout {
+impl Layout for Tile {
     fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
-        let BlockPos {
-            x: easting,
-            y: elevation,
-            z: southing,
-        } = pos;
+        use self::{Facing::*, Tile::*};
+        let south_bound = self.south_bound();
+        let local_z = if south_bound { pos.z } else { 1 - pos.z };
+        let facing = if south_bound { South } else { North };
+        let repeater = |delay: RedStoneTick| repeater(delay.to_string(), facing, false, false);
+        debug_assert!(!matches!(self, Hold { stem: 0, .. } | Hold { cap: 0, .. }));
 
-        let tile_col = |s: i32, row: i32| match row & 1 {
-            0 => s + 1,
-            _ => self.southing - s,
+        let stem = || match (pos.x, pos.y) {
+            (1, 0) => Some(chain_block()),
+            (1, 1) if self.stem() == 0 => Some(redstone_wire()),
+            (1, 1) => Some(repeater(self.stem())),
+            _ => None,
         };
-
-        if southing == 0 {
-            // North edge turn
-            let easting = easting + 1;
-            let group = easting & 3;
-            let row = easting / 4 * 2;
-            let col = group as usize / 2;
-            let layout_idx = (elevation + (group & 1) * 3) as u8;
-            self.track.tile_block(row, col, layout_idx)
-        } else if southing + 1 == self.southing {
-            // South edge turn
-            let easting = easting + 3;
-            let group = easting & 3;
-            let row = easting / 4 * 2 - 1;
-            let col = group as usize / 2;
-            let layout_idx = (elevation + (group & 1) * 3) as u8;
-            self.track.tile_block(row, col, layout_idx)
-        } else if easting & 1 == 1 {
-            // Trunk row
-            let row = easting / 2;
-            let col = tile_col(southing, row) as usize;
-            self.track.tile_block(row, col, elevation as u8)
-        } else {
-            // Tooth row
-            let cell = easting / 2;
-            let zig = (cell + southing) & 1;
-            let row = cell - zig;
-            let col = tile_col(southing, row) as usize;
-            let layout_idx = (elevation + 3 + zig * 3) as u8;
-            self.track.tile_block(row, col, layout_idx)
+        let hold = |cap: RedStoneTick| match (pos.x, pos.y) {
+            (1, 0) => Some(chain_block()),
+            (1, 1) => Some(repeater(cap)),
+            _ => None,
+        };
+        let node = |cap: [Option<Tone>; 2]| match (pos.x, pos.y) {
+            (1, 0 | 1) => Some(chain_block()),
+            (1, 2) => Some(redstone_wire()),
+            (0, 0) => Some(inst_block(cap[0], air)),
+            (0, 1) => Some(note_block(cap[0], air)),
+            (2, 0) => Some(inst_block(cap[1], air)),
+            (2, 1) => Some(note_block(cap[1], air)),
+            _ => None,
+        };
+        let sink = |cap: [Option<Tone>; 3]| match (pos.x, pos.y) {
+            (1, 0) => Some(inst_block(cap[0], chain_block)),
+            (1, 1) => Some(note_block(cap[0], chain_block)),
+            (0, 0) => Some(inst_block(cap[1], air)),
+            (0, 1) => Some(note_block(cap[1], air)),
+            (2, 0) => Some(inst_block(cap[2], air)),
+            (2, 1) => Some(note_block(cap[2], air)),
+            _ => None,
+        };
+        match (local_z, *self) {
+            (0, _) => stem(),
+            (1, Hold { cap, .. }) => hold(cap),
+            (1, Node { cap, .. }) => node(cap),
+            (1, Sink { cap, .. }) => sink(cap),
+            _ => unreachable!(),
         }
     }
 
     fn size(&self) -> BlockPos {
-        BlockPos::new(self.easting, Self::ELEVATION, self.southing)
+        BlockPos::new(3, 3, 2)
     }
 }
 
-// Track
-//
-// ++++++++++++============++++++++++++============++++++++++++============
-
-/// A track's tiles with its row-column metadata.
-struct Track {
-    tiles: Vec<Tile>,
-    cols: Option<NonZero<usize>>,
+#[derive(Clone, Copy)]
+enum Turn {
+    Sink {
+        width: i32,
+        stem: RedStoneTick,
+        cap: [Option<Tone>; 2],
+    },
+    Node {
+        width: i32,
+        stem: RedStoneTick,
+        cap: Option<Tone>,
+    },
 }
 
-impl Track {
-    /// Build a `Track` from timed notes, packing them into tiles.
-    fn new<Trk, Chord>(
-        timed_notes: Trk,
-        repeater_coarse: Option<NonZero<RedStoneTick>>,
-        columns: Option<NonZero<usize>>,
-    ) -> Self
-    where
-        Trk: IntoIterator<Item = (RedStoneTick, Chord)>,
-        Chord: IntoIterator,
-        Chord::Item: Into<Tone>,
-    {
-        let repeater_coarse = repeater_coarse.map_or(Tick::MAX, |l| l.get());
-        let mut track = Self {
-            tiles: Default::default(),
-            cols: columns.map(|c| NonZero::new(c.get() * 2).unwrap()),
-        };
-        let mut current_tick: RedStoneTick = RedStoneTick::MAX;
-
-        for (redstone_tick, notes) in timed_notes {
-            let mut notes: Vec<Tone> = notes.into_iter().map(|n| n.into()).collect();
-            let mut delay = redstone_tick.wrapping_sub(current_tick);
-            current_tick = redstone_tick;
-
-            while let Some((stem, canopy, consume)) =
-                Self::_pop_delay(delay, repeater_coarse, &track)
-            {
-                track.push(stem);
-                track.push(canopy);
-                delay -= consume;
-            }
-
-            let at_start = track.at_row_start();
-            let at_end = track.at_row_end();
-            let stem = Tile::stem(delay, at_start);
-            let canopy = Tile::canopy(iter::from_fn(|| notes.pop()), at_start, !at_end);
-            track.push(stem);
-            track.push(canopy);
-
-            if !notes.is_empty() {
-                let at_start = track.at_row_start();
-                let at_end = track.at_row_end();
-                let is_terminal = !at_end && at_start && notes.len() <= 2;
-                let stem = Tile::stem(0, at_start);
-                let canopy = Tile::canopy(iter::from_fn(|| notes.pop()), at_start, is_terminal);
-                track.push(stem);
-                track.push(canopy);
-            }
-            while !notes.is_empty() {
-                let at_start = track.at_row_start();
-                let at_end = track.at_row_end();
-                let is_terminal = !at_end && notes.len() <= if at_start { 2 } else { 3 };
-                let stem = Tile::stem(0, at_start);
-                let canopy = Tile::canopy(iter::from_fn(|| notes.pop()), at_start, is_terminal);
-                track.push(stem);
-                track.push(canopy);
-            }
+impl Turn {
+    fn width(&self) -> i32 {
+        match *self {
+            Turn::Sink { width, .. } | Turn::Node { width, .. } => width,
         }
-        track
     }
 
-    fn _pop_delay(
-        delay: RedStoneTick,
-        coarse: Tick,
-        track: &Track,
-    ) -> Option<(Tile, Tile, RedStoneTick)> {
-        let chain = track.last().is_some_and(|canopy| {
-            // Chain state if no signal was previously output
-            matches!(canopy, Tile::Delay(c) if c == &coarse)
-        });
-        let at_start = track.at_row_start();
-        let at_end = track.at_row_end();
-        let pair = |stem, canopy| Self::_place_delay(stem, canopy, at_start, at_end);
-        let turn = |stem| Self::_place_delay(stem, 0, at_start, at_end);
+    fn stem(&self) -> RedStoneTick {
+        match *self {
+            Turn::Sink { stem, .. } | Turn::Node { stem, .. } => stem,
+        }
+    }
 
-        debug_assert!(!((2..=4).contains(&coarse) && chain && at_start));
-        debug_assert!(!(coarse == 1 && chain));
+    fn sink(width: i32, stem: RedStoneTick, cap: [Option<Tone>; 2]) -> Self {
+        Self::Sink { width, stem, cap }
+    }
 
-        match (coarse, chain, at_start, at_end) {
-            // Micro-timing (coarse 2..=4)
-            (2..=4, false, false, _) if delay == coarse * 3 => pair(coarse, 0),
-            (2..=4, _, false, false) if delay > coarse * 2 => pair(coarse, coarse),
-            (2..=4, true, false, _) if delay == coarse * 2 => pair(coarse, 1),
-            (2..=4, true, false, _) if delay >= coarse => pair(coarse - 1, 0),
-            (2..=4, false, false, _) if delay > coarse => pair(coarse, 0),
-            (2..=4, false, true, _) if delay > coarse => turn(coarse),
-            // Pulse (coarse == 1)
-            (1, false, true, _) if delay > 1 => turn(coarse),
-            (1, false, false, _) if delay > 1 => pair(coarse, 0),
-            // Unaffected (else)
-            (_, _, true, _) if delay > 4 => turn(4),
-            (_, _, false, _) if delay > 8 => pair(4, 4),
-            (_, _, false, _) if delay > 4 => pair(4, 0),
+    fn node(width: i32, stem: RedStoneTick, cap: Option<Tone>) -> Self {
+        Self::Node { width, stem, cap }
+    }
+}
+
+impl Layout for Turn {
+    fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
+        use self::{Facing::*, Turn::*};
+        let local_x = self.width() - 1 - pos.x;
+        let repeater = |delay: RedStoneTick| repeater(delay.to_string(), East, false, false);
+
+        let stem = || match (local_x, pos.y) {
+            (2.., 0) => Some(chain_block()),
+            (2, 1) if self.stem() > 0 => Some(repeater(self.stem())),
+            (2.., 1) => Some(redstone_wire()),
             _ => None,
-        }
-    }
-
-    fn _place_delay(
-        stem_delay: RedStoneTick,
-        canopy_delay: RedStoneTick,
-        at_start: bool,
-        at_end: bool,
-    ) -> Option<(Tile, Tile, RedStoneTick)> {
-        debug_assert!(!(canopy_delay != 0 && at_start));
-
-        let stem = Tile::stem(stem_delay, at_start);
-        let canopy = match canopy_delay {
-            0 => Tile::canopy(iter::empty(), at_start, !at_end),
-            _ => Tile::stem(canopy_delay, false),
         };
-        Some((stem, canopy, stem_delay + canopy_delay))
-    }
-
-    fn rows(&self) -> usize {
-        self.cols.map_or(1, |c| self.len().div_ceil(c.get()))
-    }
-
-    fn cols_or_len(&self) -> usize {
-        self.cols.map_or(self.len(), |c| c.get())
-    }
-
-    fn get_tile<R: TryInto<usize>>(&self, row: R, offset: usize) -> Option<&Tile> {
-        self.tiles
-            .get(row.try_into().ok()? * self.cols_or_len() + offset)
-    }
-
-    fn tile_block(&self, row: i32, col: usize, layout_idx: u8) -> Option<GenericBlockState> {
-        let repeater_facing = match ((row & 1) == 0, col < 2) {
-            (_, true) => Facing::East,
-            (true, false) => Facing::South,
-            (false, false) => Facing::North,
-        };
-        self.get_tile(row, col)
-            .and_then(|t| t.get_block(layout_idx, repeater_facing))
-    }
-
-    fn at_row_start(&self) -> bool {
-        match self.cols {
-            Some(c) => self.len() % c.get() == 0,
-            None => self.len() < 2,
-        }
-    }
-
-    fn at_row_end(&self) -> bool {
-        match self.cols {
-            Some(c) => (self.len() + 2) % c.get() == 0,
-            None => false,
-        }
-    }
-}
-
-impl Deref for Track {
-    fn deref(&self) -> &Vec<Tile> {
-        &self.tiles
-    }
-    type Target = Vec<Tile>;
-}
-
-impl DerefMut for Track {
-    fn deref_mut(&mut self) -> &mut Vec<Tile> {
-        &mut self.tiles
-    }
-}
-
-// Tile
-//
-// ++++++++++++============++++++++++++============++++++++++++============
-
-/// A stem-canopy tile pair.
-enum Tile {
-    Delay(RedStoneTick),
-    Link,
-    Terminal(Option<Tone>, Option<Tone>, Option<Tone>),
-    Node(Option<Tone>, Option<Tone>),
-    TurningDelay(RedStoneTick),
-    TurningLink,
-    TurningTerminal(Option<Tone>, Option<Tone>),
-    TurningNode(Option<Tone>),
-}
-
-impl Tile {
-    fn stem(delay: RedStoneTick, is_turning: bool) -> Tile {
-        match (delay, is_turning) {
-            (0, true) => Tile::TurningLink,
-            (0, false) => Tile::Link,
-            (_, true) => Tile::TurningDelay(delay),
-            (_, false) => Tile::Delay(delay),
-        }
-    }
-
-    fn canopy<I: Iterator<Item = Tone>>(mut notes: I, is_turning: bool, is_terminal: bool) -> Tile {
-        match (is_turning, is_terminal) {
-            (true, true) => Tile::TurningTerminal(notes.next(), notes.next()),
-            (true, false) => Tile::TurningNode(notes.next()),
-            (false, true) => Tile::Terminal(notes.next(), notes.next(), notes.next()),
-            (false, false) => Tile::Node(notes.next(), notes.next()),
-        }
-    }
-
-    fn get_block(&self, layout_index: u8, repeater_facing: Facing) -> Option<GenericBlockState> {
-        // The repeater facing direction is reversed.
-        match (self, layout_index) {
-            // main straight track
-            (Self::Delay(_), 0) => Some(chain_block()),
-            (Self::Delay(delay), 1) => {
-                Some(repeater(delay.to_string(), repeater_facing, false, false))
-            }
-            (Self::Link, 0) => Some(chain_block()),
-            (Self::Link, 1) => Some(redstone_wire()),
-            (Self::Terminal(center, _, _), 0) => Some(inst_block(center.as_ref(), chain_block)),
-            (Self::Terminal(center, _, _), 1) => Some(note_block(center.as_ref(), chain_block)),
-            (Self::Terminal(_, left, _), 3) => Some(inst_block(left.as_ref(), air)),
-            (Self::Terminal(_, left, _), 4) => Some(note_block(left.as_ref(), air)),
-            (Self::Terminal(_, _, right), 6) => Some(inst_block(right.as_ref(), air)),
-            (Self::Terminal(_, _, right), 7) => Some(note_block(right.as_ref(), air)),
-            (Self::Node(_, _), 0 | 1) => Some(chain_block()),
-            (Self::Node(_, _), 2) => Some(redstone_wire()),
-            (Self::Node(left, _), 3) => Some(inst_block(left.as_ref(), air)),
-            (Self::Node(left, _), 4) => Some(note_block(left.as_ref(), air)),
-            (Self::Node(_, right), 6) => Some(inst_block(right.as_ref(), air)),
-            (Self::Node(_, right), 7) => Some(note_block(right.as_ref(), air)),
-            // turning variants
-            (Self::TurningDelay(_), 0 | 3) => Some(chain_block()),
-            (Self::TurningDelay(_), 1) => Some(redstone_wire()),
-            (Self::TurningDelay(delay), 4) => {
-                Some(repeater(delay.to_string(), repeater_facing, false, false))
-            }
-            (Self::TurningLink, 0 | 3) => Some(chain_block()),
-            (Self::TurningLink, 1 | 4) => Some(redstone_wire()),
-            (Self::TurningTerminal(center, _), 0) => Some(inst_block(center.as_ref(), chain_block)),
-            (Self::TurningTerminal(center, _), 1) => Some(note_block(center.as_ref(), chain_block)),
-            (Self::TurningTerminal(_, side), 3) => Some(inst_block(side.as_ref(), air)),
-            (Self::TurningTerminal(_, side), 4) => Some(note_block(side.as_ref(), air)),
-            (Self::TurningNode(_), 0 | 1) => Some(chain_block()),
-            (Self::TurningNode(_), 2) => Some(redstone_wire()),
-            (Self::TurningNode(side), 3) => Some(inst_block(side.as_ref(), air)),
-            (Self::TurningNode(side), 4) => Some(note_block(side.as_ref(), air)),
+        let sink = |cap: [Option<Tone>; 2]| match (local_x, pos.y) {
+            (1, 0) => Some(inst_block(cap[0], chain_block)),
+            (1, 1) => Some(note_block(cap[0], chain_block)),
+            (0, 0) => Some(inst_block(cap[1], air)),
+            (0, 1) => Some(note_block(cap[1], air)),
             _ => None,
+        };
+        let node = |cap: Option<Tone>| match (local_x, pos.y) {
+            (1, 0 | 1) => Some(chain_block()),
+            (1, 2) => Some(redstone_wire()),
+            (0, 0) => Some(inst_block(cap, air)),
+            (0, 1) => Some(note_block(cap, air)),
+            _ => None,
+        };
+        match (local_x, *self) {
+            (2.., _) => stem(),
+            (0 | 1, Sink { cap, .. }) => sink(cap),
+            (0 | 1, Node { cap, .. }) => node(cap),
+            _ => unreachable!(),
         }
+    }
+
+    fn size(&self) -> BlockPos {
+        BlockPos::new(self.width(), 3, 1)
     }
 }

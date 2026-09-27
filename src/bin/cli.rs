@@ -3,11 +3,11 @@ use nbs_fractal::analysis::reuse::{plan_to_tecs, reuse_flow};
 use nbs_fractal::analysis::{BoundedTec, TePlane, TransEqClass};
 use nbs_fractal::schematic::{Layout, MultiCompactLayout, MultiLinearLayout};
 use nbs_fractal::schematic::{StackedLinearLayout, TappedLayout, WithFloor};
-use rsnbs::note::{Note, Notes, Tone};
+use rsnbs::note::{Notes, Tone};
 use rsnbs::song::Song;
 use rsnbs::types::{Tick, TimeAnchor};
 use rustmatica::Litematic;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::num::NonZero;
 use std::path::Path;
 use std::str::FromStr;
@@ -55,28 +55,26 @@ struct Compact {
     /// Repeater delay coarseness 1-4 (0 = unlimited)
     #[arg(short, long, default_value_t = 0)]
     coarse: u32,
-    /// Block spacing between adjacent tracks
+    /// Block spacing between adjacent rows (0 = interlocked)
     #[arg(short, long, default_value_t = 0)]
     gap: u32,
-    /// Floor platform mode
-    #[arg(short, long, value_enum, default_value_t)]
-    floor: Floor,
+    /// Add a full floor platform below the build
+    #[arg(short, long)]
+    full_floor: bool,
 }
 
 impl Compact {
     fn run(self) {
         let song = open_song(&self.input);
-        let notes = song.notes.rescale_to_game_tick(song.header.tempo);
-
-        let mut by_tick: BTreeMap<Tick, Vec<Note>> = Default::default();
-        for (pos, note) in notes {
-            by_tick.entry(pos.into_tick()).or_default().push(note);
-        }
-
-        let tracks = std::iter::once((by_tick, NonZero::new(self.coarse)));
-        let layout = MultiCompactLayout::new(tracks, NonZero::new(self.wrap), self.gap);
+        let notes = song
+            .notes
+            .rescale_to_game_tick(song.header.tempo)
+            .map(|(pos, note)| (pos.into_tick(), note));
+        let tracks = std::iter::once((notes, NonZero::new(self.coarse)));
+        let layout =
+            MultiCompactLayout::new(tracks, NonZero::new(self.wrap), self.gap, self.full_floor);
         let description = format!("Sectional from {}", self.input);
-        let litematic = build_schematic(layout, self.floor, description);
+        let litematic = build_schematic(layout, Floor::None, description);
         write_output(&self.output, litematic);
     }
 }
