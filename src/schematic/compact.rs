@@ -1,6 +1,6 @@
 //! Compact note block layouts for NBS song projection.
 
-use super::{AsLayout, EvenlyArranged, Facing, Layout, Overlaid, WithFloor};
+use super::{AsLayout, Clipped, EvenlyArranged, Facing, Layout, Overlaid, WithFloor};
 use super::{air, chain_block, inst_block, note_block, redstone_wire, repeater};
 use crate::{GameTick, RedStoneTick};
 use mcdata::{GenericBlockState, util::BlockPos};
@@ -65,7 +65,7 @@ fn split_even_odd<I: IntoIterator<Item = (GameTick, T)>, T: Into<Tone>>(
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-pub struct CompactLayout(EvenlyArranged<Row>);
+pub struct CompactLayout(Clipped<EvenlyArranged<Row>>);
 
 impl CompactLayout {
     pub fn new<I: IntoIterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
@@ -77,13 +77,16 @@ impl CompactLayout {
         let width = 4 + gap as i32;
         let coarse = repeater_coarse.map_or(Tick::MAX, NonZero::get);
         let notes = notes.into_iter();
-        let mut events = Events::new(notes);
+        let mut cursor = Cursor::new(Events::new(notes));
         let mut south_bound = false;
         let rows = iter::from_fn(move || {
             south_bound = !south_bound;
-            Row::new(&mut events, width, coarse, wrap_length, south_bound)
+            Row::new(&mut cursor, width, coarse, wrap_length, south_bound)
         });
-        Self(EvenlyArranged::new(rows, BlockPos::new(width - 2, 0, 0)))
+        Self(Clipped::new(
+            EvenlyArranged::new(rows, BlockPos::new(width - 2, 0, 0)),
+            BlockPos::new(width - 3, 0, 0),
+        ))
     }
 }
 
@@ -97,20 +100,20 @@ struct Row(Overlaid<Turn, EvenlyArranged<Tile>>);
 
 impl Row {
     fn new<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
-        events: &mut Events<I>,
+        cursor: &mut Cursor<I>,
         width: i32,
         coarse: Tick,
         wrap_length: Option<NonZero<usize>>,
         south_bound: bool,
     ) -> Option<Self> {
         let len = wrap_length.map_or(usize::MAX, NonZero::get);
-        let turn = turn(events, width, coarse, len == 1)?;
+        let turn = turn(cursor, width, coarse, len == 1)?;
 
         let mut chained = false;
         let mut tiles = Vec::new();
         for column in 1..len {
             let closing = column + 1 == len;
-            let Some(tile) = tile(events, coarse, closing, chained, south_bound) else {
+            let Some(tile) = tile(cursor, coarse, closing, chained, south_bound) else {
                 break;
             };
             chained = matches!(tile, Tile::Hold { cap, .. } if cap == coarse);
@@ -139,12 +142,12 @@ impl AsLayout for Row {
 // ++++++++++++============++++++++++++============++++++++++++============
 
 fn turn<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
-    events: &mut Events<I>,
+    cursor: &mut Cursor<I>,
     width: i32,
     coarse: Tick,
     closing: bool,
 ) -> Option<Turn> {
-    let (wait, count) = events.pending()?;
+    let (wait, count) = cursor.pending()?;
     let terminal = !closing && (wait > 0 || count <= 2);
     let bought = match (coarse, wait) {
         (c @ 2..=4, w) if w > c => Some(c),
@@ -154,11 +157,11 @@ fn turn<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
     };
     let stem = bought.unwrap_or(wait);
     for _ in 0..stem {
-        let event = events.next();
+        let event = cursor.next();
         debug_assert!(matches!(event, Some(Event::Wait)));
     }
-    if bought.is_some() {
-        return Some(if terminal {
+    let turn = if bought.is_some() {
+        if terminal {
             Turn::Sink {
                 width,
                 stem,
@@ -170,12 +173,11 @@ fn turn<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
                 stem,
                 cap: None,
             }
-        });
-    }
-    Some(if terminal {
+        }
+    } else if terminal {
         let mut cap = [None; 2];
         for slot in cap.iter_mut().take(count.min(2)) {
-            *slot = Some(match events.next() {
+            *slot = Some(match cursor.next() {
                 Some(Event::Note(note)) => note,
                 _ => unreachable!(),
             });
@@ -185,16 +187,18 @@ fn turn<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
         Turn::Node {
             width,
             stem,
-            cap: Some(match events.next() {
+            cap: Some(match cursor.next() {
                 Some(Event::Note(note)) => note,
                 _ => unreachable!(),
             }),
         }
-    })
+    };
+    cursor.terminal = matches!(turn, Turn::Sink { .. });
+    Some(turn)
 }
 
 fn tile<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
-    events: &mut Events<I>,
+    cursor: &mut Cursor<I>,
     coarse: Tick,
     closing: bool,
     chained: bool,
@@ -202,8 +206,9 @@ fn tile<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
 ) -> Option<Tile> {
     debug_assert!(!(coarse == 1 && chained));
 
-    let (wait, count) = events.pending()?;
-    let terminal = !closing && (wait > 0 || count <= 3);
+    let (wait, count) = cursor.pending()?;
+    let fed = !cursor.terminal;
+    let terminal = !closing && (wait > 0 || (count <= 3 && fed));
     let bought = match (coarse, chained, closing, wait) {
         (c @ 2..=4, false, _, w) if w == c * 3 => Some((c, 0)),
         (c @ 2..=4, _, false, w) if w > c * 2 => Some((c, c)),
@@ -217,11 +222,11 @@ fn tile<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
     };
     let (stem, delay) = bought.unwrap_or((wait, 0));
     for _ in 0..stem + delay {
-        let event = events.next();
+        let event = cursor.next();
         debug_assert!(matches!(event, Some(Event::Wait)));
     }
-    if bought.is_some() {
-        return Some(match (delay > 0, closing) {
+    let tile = if bought.is_some() {
+        match (delay > 0, closing) {
             (true, _) => Tile::Hold {
                 stem,
                 cap: delay,
@@ -237,12 +242,11 @@ fn tile<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
                 cap: [None; 3],
                 south_bound,
             },
-        });
-    }
-    Some(if terminal {
+        }
+    } else if terminal {
         let mut cap = [None; 3];
         for slot in cap.iter_mut().take(count.min(3)) {
-            *slot = Some(match events.next() {
+            *slot = Some(match cursor.next() {
                 Some(Event::Note(note)) => note,
                 _ => unreachable!(),
             });
@@ -255,7 +259,7 @@ fn tile<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
     } else {
         let mut cap = [None; 2];
         for slot in cap.iter_mut().take(count.min(2)) {
-            *slot = Some(match events.next() {
+            *slot = Some(match cursor.next() {
                 Some(Event::Note(note)) => note,
                 _ => unreachable!(),
             });
@@ -265,16 +269,41 @@ fn tile<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
             cap,
             south_bound,
         }
-    })
+    };
+    cursor.terminal = matches!(tile, Tile::Sink { .. });
+    Some(tile)
 }
 
-// Containers: Events
+// Containers: Cursor & Events
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-enum Event {
-    Wait,
-    Note(Tone),
+struct Cursor<I: Iterator> {
+    events: Events<I>,
+    terminal: bool,
+}
+
+impl<I: Iterator> Cursor<I> {
+    fn new(events: Events<I>) -> Self {
+        Self {
+            events,
+            terminal: false,
+        }
+    }
+}
+
+impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Cursor<I> {
+    fn pending(&self) -> Option<(RedStoneTick, usize)> {
+        self.events.pending()
+    }
+}
+
+impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Iterator for Cursor<I> {
+    type Item = Event;
+
+    fn next(&mut self) -> Option<Event> {
+        self.events.next()
+    }
 }
 
 struct Events<I: Iterator> {
@@ -282,6 +311,11 @@ struct Events<I: Iterator> {
     last: RedStoneTick,
     wait: RedStoneTick,
     cache: Vec<Tone>,
+}
+
+enum Event {
+    Wait,
+    Note(Tone),
 }
 
 impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Events<I> {
