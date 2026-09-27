@@ -157,8 +157,7 @@ impl<'a, I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Emitter<'a, I> {
         let (wait, count) = self.events.pending()?;
         let terminal = !closing && (wait > 0 || count <= 2);
         let bought = match (self.coarse, wait) {
-            (c @ 2..=4, w) if w > c => Some(c),
-            (1, w) if w > 1 => Some(1),
+            (c @ 1..=4, w) if w > c => Some(c),
             (_, w) if w > 4 => Some(4),
             _ => None,
         };
@@ -186,8 +185,7 @@ impl<'a, I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Emitter<'a, I> {
             (c @ 2..=4, _, false, w) if w > c * 2 => Some((c, c)),
             (c @ 2..=4, true, _, w) if w == c * 2 => Some((c, 1)),
             (c @ 2..=4, true, _, w) if w >= c => Some((c - 1, 0)),
-            (c @ 2..=4, false, _, w) if w > c => Some((c, 0)),
-            (1, false, _, w) if w > 1 => Some((1, 0)),
+            (c @ 1..=4, false, _, w) if w > c => Some((c, 0)),
             (_, false, _, w) if w > 8 => Some((4, 4)),
             (_, false, _, w) if w > 4 => Some((4, 0)),
             _ => None,
@@ -243,9 +241,7 @@ impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Events<I> {
         this.refresh();
         this
     }
-}
 
-impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Events<I> {
     fn pending(&self) -> Option<(RedStoneTick, usize)> {
         (!self.cache.is_empty()).then_some((self.wait, self.cache.len()))
     }
