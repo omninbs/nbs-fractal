@@ -184,15 +184,16 @@ impl<'a, I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Emitter<'a, I> {
             (_, false, _) if wait > 4 => Some((4, 0)),
             _ => None,
         };
-        let (stem, delay) = bought.unwrap_or((wait, 0));
-        self.events.take_waits(stem + delay);
-        let tile = match (bought.is_some(), delay > 0, terminal, closing) {
-            (_, true, _, _) => Tile::hold(stem, delay, self.south_bound),
-            (true, false, _, true) => Tile::node(stem, [None; 2], self.south_bound),
-            (true, false, _, false) => Tile::sink(stem, [None; 3], self.south_bound),
-            (false, false, true, _) => Tile::sink(stem, self.load(count), self.south_bound),
-            (false, false, false, _) => Tile::node(stem, self.load(count), self.south_bound),
+
+        let (stem, cap) = bought.unwrap_or((wait, 0));
+        self.events.take_waits(stem + cap);
+        let placed = bought.map_or(count, |_| 0);
+        let tile = match (cap > 0, terminal) {
+            (true, _) => Tile::hold(stem, cap, self.south_bound),
+            (false, true) => Tile::sink(stem, self.load(placed), self.south_bound),
+            (false, false) => Tile::node(stem, self.load(placed), self.south_bound),
         };
+
         self.terminal = matches!(tile, Tile::Sink { .. });
         self.chained = matches!(tile, Tile::Hold { cap, .. } if cap == self.coarse);
         Some(tile)
