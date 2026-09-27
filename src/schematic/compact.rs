@@ -164,32 +164,12 @@ impl<'a, I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Emitter<'a, I> {
         };
         let stem = bought.unwrap_or(wait);
         self.events.take_waits(stem);
-        let turn = if bought.is_some() {
-            if terminal {
-                Turn::Sink {
-                    width: self.width,
-                    stem,
-                    cap: [None; 2],
-                }
-            } else {
-                Turn::Node {
-                    width: self.width,
-                    stem,
-                    cap: None,
-                }
-            }
-        } else if terminal {
-            Turn::Sink {
-                width: self.width,
-                stem,
-                cap: self.load(count),
-            }
-        } else {
-            Turn::Node {
-                width: self.width,
-                stem,
-                cap: Some(self.events.take_note()),
-            }
+        let width = self.width;
+        let turn = match (terminal, bought.is_some()) {
+            (true, true) => Turn::sink(width, stem, [None; 2]),
+            (true, false) => Turn::sink(width, stem, self.load(count)),
+            (false, true) => Turn::node(width, stem, None),
+            (false, false) => Turn::node(width, stem, Some(self.events.take_note())),
         };
         self.terminal = matches!(turn, Turn::Sink { .. });
         Some(turn)
@@ -214,36 +194,13 @@ impl<'a, I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Emitter<'a, I> {
         };
         let (stem, delay) = bought.unwrap_or((wait, 0));
         self.events.take_waits(stem + delay);
-        let tile = if bought.is_some() {
-            match (delay > 0, closing) {
-                (true, _) => Tile::Hold {
-                    stem,
-                    cap: delay,
-                    south_bound: self.south_bound,
-                },
-                (false, true) => Tile::Node {
-                    stem,
-                    cap: [None; 2],
-                    south_bound: self.south_bound,
-                },
-                (false, false) => Tile::Sink {
-                    stem,
-                    cap: [None; 3],
-                    south_bound: self.south_bound,
-                },
-            }
-        } else if terminal {
-            Tile::Sink {
-                stem,
-                cap: self.load(count),
-                south_bound: self.south_bound,
-            }
-        } else {
-            Tile::Node {
-                stem,
-                cap: self.load(count),
-                south_bound: self.south_bound,
-            }
+        let south_bound = self.south_bound;
+        let tile = match (bought.is_some(), delay > 0, terminal, closing) {
+            (_, true, _, _) => Tile::hold(stem, delay, south_bound),
+            (true, false, _, true) => Tile::node(stem, [None; 2], south_bound),
+            (true, false, _, false) => Tile::sink(stem, [None; 3], south_bound),
+            (false, false, true, _) => Tile::sink(stem, self.load(count), south_bound),
+            (false, false, false, _) => Tile::node(stem, self.load(count), south_bound),
         };
         self.terminal = matches!(tile, Tile::Sink { .. });
         self.chained = matches!(tile, Tile::Hold { cap, .. } if cap == self.coarse);
@@ -378,6 +335,30 @@ impl Tile {
             Tile::Hold { stem, .. } | Tile::Sink { stem, .. } | Tile::Node { stem, .. } => stem,
         }
     }
+
+    fn hold(stem: RedStoneTick, cap: RedStoneTick, south_bound: bool) -> Self {
+        Self::Hold {
+            stem,
+            cap,
+            south_bound,
+        }
+    }
+
+    fn sink(stem: RedStoneTick, cap: [Option<Tone>; 3], south_bound: bool) -> Self {
+        Self::Sink {
+            stem,
+            cap,
+            south_bound,
+        }
+    }
+
+    fn node(stem: RedStoneTick, cap: [Option<Tone>; 2], south_bound: bool) -> Self {
+        Self::Node {
+            stem,
+            cap,
+            south_bound,
+        }
+    }
 }
 
 impl Layout for Tile {
@@ -457,6 +438,14 @@ impl Turn {
         match *self {
             Turn::Sink { stem, .. } | Turn::Node { stem, .. } => stem,
         }
+    }
+
+    fn sink(width: i32, stem: RedStoneTick, cap: [Option<Tone>; 2]) -> Self {
+        Self::Sink { width, stem, cap }
+    }
+
+    fn node(width: i32, stem: RedStoneTick, cap: Option<Tone>) -> Self {
+        Self::Node { width, stem, cap }
     }
 }
 
