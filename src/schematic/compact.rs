@@ -155,8 +155,9 @@ impl<'a, I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Emitter<'a, I> {
 
     fn turn(&mut self, closing: bool) -> Option<Turn> {
         let (wait, count) = self.events.pending()?;
-        let terminal = !closing && (wait > 0 || count <= 2);
         let stem = wait.min(self.coarse.min(4));
+        let feeds = closing && (wait > stem || count > 2 || self.events.has_next_group());
+        let terminal = !feeds && (wait > 0 || count <= 2);
         self.events.take_waits(stem);
         let width = self.width;
         let turn = match (terminal, wait > stem) {
@@ -173,7 +174,6 @@ impl<'a, I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Emitter<'a, I> {
         debug_assert!(!(self.coarse == 1 && self.chained));
 
         let (wait, count) = self.events.pending()?;
-        let terminal = !closing && (wait > 0 || (count <= 3 && !self.terminal));
         let bought = match (self.coarse, self.chained, closing) {
             (c @ 2..=4, false, _) if wait == c * 3 => Some((c, 0)),
             (c @ 2..=4, _, false) if wait > c * 2 => Some((c, c)),
@@ -185,6 +185,8 @@ impl<'a, I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Emitter<'a, I> {
             _ => None,
         };
 
+        let feeds = closing && (bought.is_some() || count > 3 || self.events.has_next_group());
+        let terminal = !feeds && (wait > 0 || (count <= 3 && !self.terminal));
         let (stem, cap) = bought.unwrap_or((wait, 0));
         self.events.take_waits(stem + cap);
         let placed = bought.map_or(count, |_| 0);
@@ -238,6 +240,10 @@ impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Events<I> {
 
     fn pending(&self) -> Option<(RedStoneTick, usize)> {
         (!self.cache.is_empty()).then_some((self.wait, self.cache.len()))
+    }
+
+    fn has_next_group(&mut self) -> bool {
+        self.notes.peek().is_some()
     }
 
     fn take_waits(&mut self, ticks: RedStoneTick) {
