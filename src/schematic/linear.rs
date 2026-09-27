@@ -1,6 +1,6 @@
 //! Linear time-proportional layout for NBS song projection.
 
-use super::{AsLayout, EvenlyArranged, Facing, Layout, Overlaid};
+use super::{AsLayout, Clipped, EvenlyArranged, Facing, Layout, Overlaid};
 use super::{WithFloor, air, chain_block, inst_block, note_block};
 use super::{redstone_block, repeater, sticky_piston};
 use crate::schematic::{WireConn, wire_state};
@@ -89,7 +89,7 @@ impl AsLayout for StackedLinearLayout {
 // ++++++++++++============++++++++++++============++++++++++++============
 
 /// A zigzag linear layout for one track.
-pub struct LinearLayout(EvenlyArranged<Row>);
+pub struct LinearLayout(Clipped<EvenlyArranged<Row>>);
 
 impl LinearLayout {
     /// Lays a pre-filed cell container out into lanes.
@@ -111,9 +111,11 @@ impl LinearLayout {
             });
             lanes.push(lane.collect());
         }
+        let pitch = BlockPos::new(width - 2, 0, 0);
+        let clip = BlockPos::new(width - scale.width(), 0, 0);
         lanes
             .into_iter()
-            .map(|rows| Self(EvenlyArranged::new(rows, BlockPos::new(width - 2, 0, 0))))
+            .map(|rows| Self(Clipped::new(EvenlyArranged::new(rows, pitch), clip)))
             .collect()
     }
 }
