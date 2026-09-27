@@ -104,9 +104,19 @@ impl Row {
         south_bound: bool,
     ) -> Option<Self> {
         let len = wrap_length.map_or(usize::MAX, NonZero::get);
+        let turn = turn(events, width, coarse, len == 1)?;
 
-        let turn = Self::turn(events, width, coarse, len == 1)?;
-        let tiles = Self::tiles(events, len);
+        let mut chained = false;
+        let mut tiles = Vec::new();
+        for column in 1..len {
+            let closing = column + 1 == len;
+            let Some(tile) = tile(events, coarse, closing, chained, south_bound) else {
+                break;
+            };
+            chained = matches!(tile, Tile::Hold { cap, .. } if cap == coarse);
+            tiles.push(tile);
+        }
+
         let depth = wrap_length.map_or(tiles.len() + 1, NonZero::get);
         let southing = 2 * depth as i32;
         let size = BlockPos::new(width, 3, southing);
@@ -116,151 +126,146 @@ impl Row {
         let tiles_at = BlockPos::new(-1, 0, if south_bound { 1 } else { -2 });
         Some(Self(Overlaid::new(turn_at, turn, tiles_at, rest, size)))
     }
-
-    fn turn<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
-        events: &mut Events<I>,
-        width: i32,
-        coarse: Tick,
-        closing: bool,
-    ) -> Option<Turn> {
-        fn micro(
-            coarse: Tick,
-            chained: bool,
-            opening: bool,
-            closing: bool,
-            wait: RedStoneTick,
-        ) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
-            let series = |stem: Tick, cap: Tick| Some((stem, cap, stem + cap));
-            match (chained, opening, closing) {
-                (false, false, _) if wait == coarse * 3 => series(coarse, 0),
-                (_, false, false) if wait > coarse * 2 => series(coarse, coarse),
-                (true, false, _) if wait == coarse * 2 => series(coarse, 1),
-                (true, false, _) if wait >= coarse => series(coarse - 1, 0),
-                (false, false, _) if wait > coarse => series(coarse, 0),
-                (false, true, _) if wait > coarse => series(coarse, 0),
-                _ => None,
-            }
-        }
-
-        fn pulse(
-            chained: bool,
-            wait: RedStoneTick,
-        ) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
-            match (chained, wait) {
-                (false, wait) if wait > 1 => Some((1, 0, 1)),
-                _ => None,
-            }
-        }
-
-        fn free(
-            opening: bool,
-            wait: RedStoneTick,
-        ) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
-            match (opening, wait) {
-                (true, wait) if wait > 4 => Some((4, 0, 4)),
-                (false, wait) if wait > 8 => Some((4, 4, 8)),
-                (false, wait) if wait > 4 => Some((4, 0, 4)),
-                _ => None,
-            }
-        }
-
-        fn buy(
-            coarse: Tick,
-            chained: bool,
-            wait: RedStoneTick,
-            opening: bool,
-            closing: bool,
-        ) -> Option<(RedStoneTick, RedStoneTick, RedStoneTick)> {
-            debug_assert!(!((2..=4).contains(&coarse) && chained && opening));
-            debug_assert!(!(coarse == 1 && chained));
-
-            match coarse {
-                2..=4 => {
-                    micro(coarse, chained, opening, closing, wait).or_else(|| free(opening, wait))
-                }
-                1 => pulse(chained, wait).or_else(|| free(opening, wait)),
-                _ => free(opening, wait),
-            }
-        }
-
-        let (wait, available) = events.pending()?;
-        let terminal = !closing && (wait > 0 || available <= 2);
-        let bought = match wait > 0 {
-            true => buy(coarse, false, wait, true, closing),
-            false => None,
-        };
-        Some(match bought {
-            Some((stem, _, spent)) => {
-                for _ in 0..spent {
-                    let event = events.next();
-                    debug_assert!(matches!(event, Some(Event::Wait)));
-                }
-                match terminal {
-                    true => Turn::Sink {
-                        width,
-                        stem,
-                        cap: [None; 2],
-                    },
-                    false => Turn::Node {
-                        width,
-                        stem,
-                        cap: None,
-                    },
-                }
-            }
-            None => {
-                for _ in 0..wait {
-                    let event = events.next();
-                    debug_assert!(matches!(event, Some(Event::Wait)));
-                }
-                match terminal {
-                    true => {
-                        let mut cap = [None; 2];
-                        for slot in cap.iter_mut().take(available.min(2)) {
-                            *slot = match events.next() {
-                                Some(Event::Note(note)) => Some(note),
-                                _ => unreachable!(),
-                            };
-                        }
-                        Turn::Sink {
-                            width,
-                            stem: wait,
-                            cap,
-                        }
-                    }
-                    false => Turn::Node {
-                        width,
-                        stem: wait,
-                        cap: match events.next() {
-                            Some(Event::Note(note)) => Some(note),
-                            _ => unreachable!(),
-                        },
-                    },
-                }
-            }
-        })
-    }
-
-    fn tiles<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
-        events: &mut Events<I>,
-        len: usize,
-    ) -> Vec<Tile> {
-        let mut column = 1;
-        let mut tiles = Vec::new();
-        while column != len {
-            let closing = column + 1 == len;
-            column += 1;
-            let tile: Tile = todo!();
-            tiles.push(tile);
-        }
-        tiles
-    }
 }
 
 impl AsLayout for Row {
     fn as_layout(&self) -> &impl Layout {
         &self.0
     }
+}
+
+// Generation: Turn & Tile
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+fn turn<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
+    events: &mut Events<I>,
+    width: i32,
+    coarse: Tick,
+    closing: bool,
+) -> Option<Turn> {
+    let (wait, count) = events.pending()?;
+    let terminal = !closing && (wait > 0 || count <= 2);
+    let bought = match (coarse, wait) {
+        (c @ 2..=4, w) if w > c => Some(c),
+        (1, w) if w > 1 => Some(1),
+        (_, w) if w > 4 => Some(4),
+        _ => None,
+    };
+    let stem = bought.unwrap_or(wait);
+    for _ in 0..stem {
+        let event = events.next();
+        debug_assert!(matches!(event, Some(Event::Wait)));
+    }
+    if bought.is_some() {
+        return Some(if terminal {
+            Turn::Sink {
+                width,
+                stem,
+                cap: [None; 2],
+            }
+        } else {
+            Turn::Node {
+                width,
+                stem,
+                cap: None,
+            }
+        });
+    }
+    Some(if terminal {
+        let mut cap = [None; 2];
+        for slot in cap.iter_mut().take(count.min(2)) {
+            *slot = Some(match events.next() {
+                Some(Event::Note(note)) => note,
+                _ => unreachable!(),
+            });
+        }
+        Turn::Sink { width, stem, cap }
+    } else {
+        Turn::Node {
+            width,
+            stem,
+            cap: Some(match events.next() {
+                Some(Event::Note(note)) => note,
+                _ => unreachable!(),
+            }),
+        }
+    })
+}
+
+fn tile<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>>(
+    events: &mut Events<I>,
+    coarse: Tick,
+    closing: bool,
+    chained: bool,
+    south_bound: bool,
+) -> Option<Tile> {
+    debug_assert!(!(coarse == 1 && chained));
+
+    let (wait, count) = events.pending()?;
+    let terminal = !closing && (wait > 0 || count <= 3);
+    let bought = match (coarse, chained, closing, wait) {
+        (c @ 2..=4, false, _, w) if w == c * 3 => Some((c, 0)),
+        (c @ 2..=4, _, false, w) if w > c * 2 => Some((c, c)),
+        (c @ 2..=4, true, _, w) if w == c * 2 => Some((c, 1)),
+        (c @ 2..=4, true, _, w) if w >= c => Some((c - 1, 0)),
+        (c @ 2..=4, false, _, w) if w > c => Some((c, 0)),
+        (1, false, _, w) if w > 1 => Some((1, 0)),
+        (_, false, _, w) if w > 8 => Some((4, 4)),
+        (_, false, _, w) if w > 4 => Some((4, 0)),
+        _ => None,
+    };
+    let (stem, delay) = bought.unwrap_or((wait, 0));
+    for _ in 0..stem + delay {
+        let event = events.next();
+        debug_assert!(matches!(event, Some(Event::Wait)));
+    }
+    if bought.is_some() {
+        return Some(match (delay > 0, closing) {
+            (true, _) => Tile::Hold {
+                stem,
+                cap: delay,
+                south_bound,
+            },
+            (false, true) => Tile::Node {
+                stem,
+                cap: [None; 2],
+                south_bound,
+            },
+            (false, false) => Tile::Sink {
+                stem,
+                cap: [None; 3],
+                south_bound,
+            },
+        });
+    }
+    Some(if terminal {
+        let mut cap = [None; 3];
+        for slot in cap.iter_mut().take(count.min(3)) {
+            *slot = Some(match events.next() {
+                Some(Event::Note(note)) => note,
+                _ => unreachable!(),
+            });
+        }
+        Tile::Sink {
+            stem,
+            cap,
+            south_bound,
+        }
+    } else {
+        let mut cap = [None; 2];
+        for slot in cap.iter_mut().take(count.min(2)) {
+            *slot = Some(match events.next() {
+                Some(Event::Note(note)) => note,
+                _ => unreachable!(),
+            });
+        }
+        Tile::Node {
+            stem,
+            cap,
+            south_bound,
+        }
+    })
 }
 
 // Containers: Events
