@@ -3,9 +3,9 @@ use nbs_fractal::analysis::reuse::{plan_to_tecs, reuse_flow};
 use nbs_fractal::analysis::{BoundedTec, TePlane, TransEqClass};
 use nbs_fractal::schematic::{Layout, MultiCompactLayout, MultiLinearLayout};
 use nbs_fractal::schematic::{StackedLinearLayout, TappedLayout, WithFloor};
-use rsnbs::note::{Notes, Tone};
-use rsnbs::song::Song;
-use rsnbs::types::{Tick, TimeAnchor};
+use rsnbs::note::{Note, Notes, Tone};
+use rsnbs::song::{Layer, Song};
+use rsnbs::types::{LayerAnchor, Position, Tick, TimeAnchor};
 use rustmatica::Litematic;
 use std::collections::BTreeSet;
 use std::num::NonZero;
@@ -192,33 +192,33 @@ impl Decompose {
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-/// Manually specified TEC offsets applied as reuse layers.
+/// Decompose the song into TEC groups and re-emit it as an NBS.
+///
+/// Rule offsets are interpreted in the song's own (file) tick, so each TEC
+/// group is written on its own layers, separated from the next by a blank
+/// layer. Original layer assignments are discarded.
 #[derive(clap::Args)]
 struct Match {
     /// Path to input NBS file
     input: String,
-    /// Path to output litematic file
-    #[arg(default_value = "out/generated_match.litematic")]
+    /// Path to output NBS file
+    #[arg(default_value = "out/generated_match.nbs")]
     output: String,
     /// Match rule offsets, slash-separated; multiple rules in order
     #[arg(short, long, num_args = 1..)]
     rules: Vec<Rule>,
-    /// Max columns per row before wrapping (0 = no wrap)
-    #[arg(short, long, default_value_t = 16)]
-    wrap: usize,
-    /// Block spacing between adjacent rows (0 = interlocked)
-    #[arg(short, long, default_value_t = 0)]
-    gap: u32,
-    /// Add a full floor platform below the build
-    #[arg(short, long)]
-    full_floor: bool,
 }
 
 impl Match {
     fn run(self) {
-        let song = open_song(&self.input);
-        let mut residual: TePlane<Tone> =
-            TePlane::from_iter(song.notes.rescale_to_redstone_tick(song.header.tempo));
+        let mut song = open_song(&self.input);
+
+        // match on the raw file ticks: the output NBS keeps the original timing.
+        let timed_notes = song
+            .notes
+            .iter()
+            .map(|(pos, note)| (pos.into_tick(), note.tone));
+        let mut residual: TePlane<Tone> = TePlane::from_iter(timed_notes);
 
         // normalize rules.
         let rules = self.rules.into_iter().map(|Rule(mut scatter)| {
@@ -227,23 +227,40 @@ impl Match {
             scatter
         });
 
-        // one TEC each.
         let mut tecs: Vec<BoundedTec<Tone>> = Vec::new();
+        // one TEC each.
         for rule in rules {
             let scatter: BTreeSet<_> = rule.into_iter().filter_map(NonZero::new).collect();
             tecs.push(BoundedTec::extract_from(&mut residual, scatter));
         }
-
         // keep the rest.
         if !residual.is_empty() {
             let offsets = Default::default();
             tecs.push(BoundedTec::new(TransEqClass::new(offsets, residual)));
         }
 
-        let layout = TappedLayout::new(tecs, NonZero::new(self.wrap), self.gap, self.full_floor);
-        let description = format!("Match from {}", self.input);
-        let litematic = build_schematic(layout, Floor::None, description);
-        write_output(&self.output, litematic);
+        // one layer group per TEC; `concat` leaves a blank layer between groups.
+        let groups = tecs.into_iter().map(|tec| {
+            let points = tec
+                .into_inner()
+                .expand()
+                .into_points()
+                .map(|(tick, tone)| (tick, Note::from(tone)));
+            Notes::<Position, Note>::pack_layers(points)
+                .into_iter()
+                .collect()
+        });
+        let notes: Notes<Position, Note> = Notes::concat(groups).collect();
+        let layers = notes
+            .keys()
+            .map(|pos| pos.into_layer())
+            .max()
+            .map_or(0, |last| last as usize + 1);
+
+        song.notes = notes;
+        song.layers = vec![Layer::default(); layers];
+        song.header.song_name = format!("Match from {}", self.input);
+        write_song(&self.output, song);
     }
 }
 
@@ -301,12 +318,24 @@ fn open_song(input: &str) -> Song {
 
 /// Ensures the parent directory exists, writes the litematic, and reports it.
 fn write_output(output: &str, litematic: Litematic) {
+    ensure_parent(output);
+    litematic.write_file(output).unwrap();
+    eprintln!("Wrote {output}");
+}
+
+/// Ensures the parent directory exists, writes the song as NBS, and reports it.
+fn write_song(output: &str, mut song: Song) {
+    ensure_parent(output);
+    song.save_nbs(output).unwrap();
+    eprintln!("Wrote {output}");
+}
+
+/// Creates the output's parent directory when it has one.
+fn ensure_parent(output: &str) {
     let parent = Path::new(output)
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty());
     if let Some(dir) = parent {
         std::fs::create_dir_all(dir).unwrap();
     }
-    litematic.write_file(output).unwrap();
-    eprintln!("Wrote {output}");
 }
