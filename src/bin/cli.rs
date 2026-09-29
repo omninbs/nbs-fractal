@@ -313,16 +313,27 @@ struct Tapped {
 impl Tapped {
     fn run(self) {
         let song = open_song(&self.input);
-        let notes: Notes = song
-            .notes
-            .rescale_to_redstone_tick(song.header.tempo)
-            .collect();
 
-        // one layer group per TEC; restore each group's widest scatter.
-        let tecs: Vec<BoundedTec<Tone>> = notes
+        // Split into TEC groups on the native ticks, then rescale each group as a
+        // `(Tick, Event)` stream into redstone ticks before restoring. Rescaling
+        // first is fine as long as multiplicities are kept: folding into a
+        // position-keyed `Notes` map would overwrite the notes that collapse
+        // onto one redstone tick and so erase the `K (+) S` factor.
+        let tecs: Vec<BoundedTec<Tone>> = song
+            .notes
             .split_by_layer_gaps()
             .into_iter()
-            .map(|group| BoundedTec::restore(&group.into_iter().collect()))
+            .map(|group| {
+                let notes: Notes<Position, Tone> = group
+                    .into_iter()
+                    .map(|(pos, note)| (pos, note.tone))
+                    .collect();
+                let plane: TePlane<Tone> = notes
+                    .rescale_to_redstone_tick(song.header.tempo)
+                    .map(|(pos, tone)| (pos.into_tick(), tone))
+                    .collect();
+                BoundedTec::restore(&plane)
+            })
             .collect();
 
         let layout = TappedLayout::new(tecs, NonZero::new(self.wrap), self.gap, self.full_floor);
