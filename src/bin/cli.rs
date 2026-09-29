@@ -1,8 +1,8 @@
 use clap::Parser;
-use nbs_fractal::analysis::reuse::{plan_to_tecs, reuse_flow};
+use nbs_fractal::analysis::reuse::reuse_flow;
 use nbs_fractal::analysis::{BoundedTec, TePlane, TransEqClass};
 use nbs_fractal::schematic::{Layout, MultiCompactLayout, MultiLinearLayout};
-use nbs_fractal::schematic::{StackedLinearLayout, TappedLayout, WithFloor};
+use nbs_fractal::schematic::{StackedLinearLayout, WithFloor};
 use rsnbs::note::{Note, Notes, Tone};
 use rsnbs::song::{Layer, Song};
 use rsnbs::types::{LayerAnchor, Position, Tick, TimeAnchor};
@@ -131,55 +131,50 @@ impl Linear {
 
 // **Experimental**: output may change.
 
-/// Decompose an NBS song into TEC layers and a residual (tapped delay line).
+/// Decompose an NBS song into automatically matched TEC groups.
 #[derive(clap::Args)]
 struct Decompose {
     /// Path to input NBS file
     input: String,
-    /// Path to output litematic file
-    #[arg(default_value = "out/generated_tapped.litematic")]
+    /// Path to output NBS file
+    #[arg(default_value = "out/generated_decompose.nbs")]
     output: String,
     /// Max number of layers (TECs) to generate; 0 = no budget
     #[arg(short, long, default_value_t = 2)]
     layers: usize,
-    /// Max columns per row before wrapping (0 = no wrap)
-    #[arg(short, long, default_value_t = 16)]
-    wrap: usize,
-    /// Block spacing between adjacent rows (0 = interlocked)
-    #[arg(short, long, default_value_t = 0)]
-    gap: u32,
-    /// Add a full floor platform below the build
-    #[arg(short, long)]
-    full_floor: bool,
 }
 
 impl Decompose {
     fn run(self) {
         let song = open_song(&self.input);
-        // 统一 tempo 到红石刻 (10tps)
-        let all_plane: TePlane<Tone> =
-            TePlane::from_iter(song.notes.rescale_to_redstone_tick(song.header.tempo));
 
-        // 层数预算 = 布局高度的物理替身：分解在预算耗尽时停止；
-        // 0 = 无预算，持续到自然极限（残差无任何同音色配对），层数可能远超布局可行范围
+        // match on the raw file ticks: the output NBS keeps the original timing.
+        let points = song
+            .notes
+            .iter()
+            .map(|(pos, note)| (pos.into_tick(), note.tone));
+        let all_plane: TePlane<Tone> = points.collect();
+
+        // 层数预算：分解在预算耗尽时停止；0 = 无预算（残差无任何同音色配对）。
         let max_layers = match self.layers {
             0 => usize::MAX,
             n => n,
         };
         let (plan, _, residual) = reuse_flow(&all_plane, 6, max_layers);
 
-        // 物化适配：延迟线最小间距限制内的层进入 TEC，其余退回残差
-        let (tecs, _) = plan_to_tecs(plan, residual);
+        // one layer group per TEC; the residual is kept as an offset-free TEC.
+        let mut tecs: Vec<BoundedTec<Tone>> = plan.into_iter().map(BoundedTec::new).collect();
+        if !residual.is_empty() {
+            let rest = TransEqClass::new(BTreeSet::new(), residual);
+            tecs.push(BoundedTec::new(rest));
+        }
 
-        let layout = TappedLayout::new(
-            tecs.into_iter().map(BoundedTec::new),
-            NonZero::new(self.wrap),
-            self.gap,
-            self.full_floor,
+        write_tec_groups(
+            song,
+            tecs,
+            &self.output,
+            format!("Decompose from {}", self.input),
         );
-        let description = format!("Tapped from {}", self.input);
-        let litematic = build_schematic(layout, Floor::None, description);
-        write_output(&self.output, litematic);
     }
 }
 
@@ -206,7 +201,7 @@ struct Match {
 
 impl Match {
     fn run(self) {
-        let mut song = open_song(&self.input);
+        let song = open_song(&self.input);
 
         // match on the raw file ticks: the output NBS keeps the original timing.
         let points = song
@@ -229,12 +224,12 @@ impl Match {
         }
 
         // one layer group per TEC; `concat` leaves a blank layer between groups.
-        let notes: Notes<Position, Note> = Notes::concat(tecs.into_iter().map(tec_notes)).collect();
-        let last = notes.keys().map(|pos| pos.into_layer()).max();
-        song.notes = notes;
-        song.layers = vec![Layer::default(); last.map_or(0, |l| l as usize + 1)];
-        song.header.song_name = format!("Match from {}", self.input);
-        write_song(&self.output, song);
+        write_tec_groups(
+            song,
+            tecs,
+            &self.output,
+            format!("Match from {}", self.input),
+        );
     }
 }
 
@@ -254,6 +249,19 @@ fn tec_notes(tec: BoundedTec<Tone>) -> Notes<Position, Note> {
     Notes::<Position, Note>::pack_layers(points)
         .into_iter()
         .collect()
+}
+
+/// Rewrites `song` with one layer group per TEC and writes it as an NBS.
+///
+/// Each TEC's expansion is packed onto its own layers; `concat` leaves a
+/// blank layer between groups. Original layer assignments are discarded.
+fn write_tec_groups(mut song: Song, tecs: Vec<BoundedTec<Tone>>, output: &str, name: String) {
+    let notes: Notes<Position, Note> = Notes::concat(tecs.into_iter().map(tec_notes)).collect();
+    let last = notes.keys().map(|pos| pos.into_layer()).max();
+    song.notes = notes;
+    song.layers = vec![Layer::default(); last.map_or(0, |l| l as usize + 1)];
+    song.header.song_name = name;
+    write_song(output, song);
 }
 
 /// One match rule's offsets, slash-separated, e.g. "4/8".
