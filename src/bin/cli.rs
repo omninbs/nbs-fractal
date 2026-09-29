@@ -1,5 +1,5 @@
 use clap::Parser;
-use nbs_fractal::analysis::reuse::reuse_flow;
+use nbs_fractal::analysis::reuse::{plan_to_tecs, reuse_flow};
 use nbs_fractal::analysis::{BoundedTec, TePlane, TransEqClass};
 use nbs_fractal::schematic::{Layout, MultiCompactLayout, MultiLinearLayout};
 use nbs_fractal::schematic::{StackedLinearLayout, TappedLayout, WithFloor};
@@ -164,12 +164,16 @@ impl Decompose {
         };
         let (plan, _, residual) = reuse_flow(&all_plane, 6, max_layers);
 
-        // one layer group per TEC; the residual is kept as an offset-free TEC.
-        let mut tecs: Vec<BoundedTec<Tone>> = plan.into_iter().map(BoundedTec::new).collect();
-        if !residual.is_empty() {
-            let rest = TransEqClass::new(BTreeSet::new(), residual);
-            tecs.push(BoundedTec::new(rest));
+        // 中继器粒度限制：过滤掉最小间隔小于 8（coarse < 4）的层，把它们
+        // 吸收回残差，保证输出能被 TappedLayout 安全消费；残差作为无偏移
+        // 层保留。
+        let (tecs, skipped) = plan_to_tecs(plan, residual);
+        if skipped > 0 {
+            eprintln!(
+                "decompose: skipped {skipped} layer(s) below the tapped granularity, absorbed into residual"
+            );
         }
+        let tecs: Vec<BoundedTec<Tone>> = tecs.into_iter().map(BoundedTec::new).collect();
 
         write_tec_groups(
             song,
