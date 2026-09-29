@@ -2,7 +2,7 @@ use clap::Parser;
 use nbs_fractal::analysis::reuse::reuse_flow;
 use nbs_fractal::analysis::{BoundedTec, TePlane, TransEqClass};
 use nbs_fractal::schematic::{Layout, MultiCompactLayout, MultiLinearLayout};
-use nbs_fractal::schematic::{StackedLinearLayout, WithFloor};
+use nbs_fractal::schematic::{StackedLinearLayout, TappedLayout, WithFloor};
 use rsnbs::note::{Note, Notes, Tone};
 use rsnbs::song::{Layer, Song};
 use rsnbs::types::{LayerAnchor, Position, Tick, TimeAnchor};
@@ -26,6 +26,7 @@ enum Cli {
     Linear(Linear),
     Decompose(Decompose),
     Match(Match),
+    Tapped(Tapped),
 }
 
 fn main() {
@@ -34,6 +35,7 @@ fn main() {
         Cli::Linear(cmd) => cmd.run(),
         Cli::Decompose(cmd) => cmd.run(),
         Cli::Match(cmd) => cmd.run(),
+        Cli::Tapped(cmd) => cmd.run(),
     }
 }
 
@@ -276,6 +278,53 @@ impl FromStr for Rule {
         let tokens = s.split(|c| matches!(c, '/' | ',' | ' '));
         let offsets: Result<_, _> = tokens.filter(|t| !t.is_empty()).map(parse).collect();
         Ok(Rule(offsets?))
+    }
+}
+
+// Tapped
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+/// Build a Tapped layout from a grouped NBS, as emitted by `match`/`decompose`.
+///
+/// The input's layers are TEC groups separated by blank layers.
+#[derive(clap::Args)]
+struct Tapped {
+    /// Path to input NBS file
+    input: String,
+    /// Path to output litematic file
+    #[arg(default_value = "out/generated_tapped.litematic")]
+    output: String,
+    /// Max columns per row before wrapping (0 = no wrap)
+    #[arg(short, long, default_value_t = 16)]
+    wrap: usize,
+    /// Block spacing between adjacent rows (0 = interlocked)
+    #[arg(short, long, default_value_t = 0)]
+    gap: u32,
+    /// Add a full floor platform below the build
+    #[arg(short, long)]
+    full_floor: bool,
+}
+
+impl Tapped {
+    fn run(self) {
+        let song = open_song(&self.input);
+        let notes: Notes = song
+            .notes
+            .rescale_to_redstone_tick(song.header.tempo)
+            .collect();
+
+        // one layer group per TEC; restore each group's widest scatter.
+        let tecs: Vec<BoundedTec<Tone>> = notes
+            .split_by_layer_gaps()
+            .into_iter()
+            .map(|group| BoundedTec::restore(&group.into_iter().collect()))
+            .collect();
+
+        let layout = TappedLayout::new(tecs, NonZero::new(self.wrap), self.gap, self.full_floor);
+        let description = format!("Tapped from {}", self.input);
+        let litematic = build_schematic(layout, Floor::None, description);
+        write_output(&self.output, litematic);
     }
 }
 

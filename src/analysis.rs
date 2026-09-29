@@ -17,6 +17,9 @@ use std::ops::{BitAnd, Deref, DerefMut};
 
 pub mod reuse;
 
+/// Multiset of ticks: a per-tone head shape, or a scatter candidate.
+type Ticks = BTreeMap<Tick, usize>;
+
 // Event
 //
 // ++++++++++++============++++++++++++============++++++++++++============
@@ -50,9 +53,8 @@ impl<E: Event> TePlane<E> {
     /// Expand into an iterator of individual `(Tick, Event)` points.
     pub fn into_points(self) -> impl Iterator<Item = Point<E>> {
         let TePlane(inner) = self;
-        inner
-            .into_iter()
-            .flat_map(|(point, count)| repeat(point).take(count))
+        let emit = |(point, count)| repeat(point).take(count);
+        inner.into_iter().flat_map(emit)
     }
 
     /// Shift every point by `offset`, expanding multiplicity.
@@ -137,17 +139,14 @@ impl<E: Event> TransEqClass<E> {
 
     /// Expand `kernel (+) scatter` into a plane, including the implied zero offset.
     pub fn expand(&self) -> TePlane<E> {
-        self.offsets()
-            .flat_map(|offset| self.kernel.translated(offset))
-            .collect()
+        let shift = |offset| self.kernel.translated(offset);
+        self.offsets().flat_map(shift).collect()
     }
 
     /// Minimum gap between adjacent offsets, including the implied zero.
     pub fn min_gap(&self) -> Option<Tick> {
-        self.offsets()
-            .array_windows::<2>()
-            .map(|[a, b]| b - a)
-            .min()
+        let gaps = self.offsets().array_windows::<2>();
+        gaps.map(|[a, b]| b - a).min()
     }
 
     /// Translate the kernel along the time axis; the scatter is unchanged.
@@ -237,6 +236,32 @@ impl<E: Event> BoundedTec<E> {
         Self::extract_from(&mut source, scatter)
     }
 
+    /// Losslessly restore a TEC from a plane that is a `kernel (+) scatter`
+    /// expansion, taking the widest shared scatter.
+    ///
+    /// Each tone exposes a head shape: its ticks relative to its own first
+    /// tick. The scatter is a direct-sum factor shared by all the heads, so it
+    /// folds pairwise: `S = h₁ ∧ h₂ ∧ … ∧ hₖ`. A lone head folds with itself.
+    pub fn restore(plane: &TePlane<E>) -> Self {
+        let mut heads = BTreeMap::<E, Ticks>::new();
+        for (&(tick, tone), &count) in plane.iter() {
+            heads.entry(tone).or_default().insert(tick, count);
+        }
+        let heads = heads.into_values().map(|h| {
+            let base = *h.keys().next().unwrap();
+            h.into_iter().map(|(t, c)| (t - base, c)).collect::<Ticks>()
+        });
+        // `common_factor` is idempotent on sets, so the trailing self-fold only
+        // matters for the lone-head case.
+        let scatter = heads
+            .reduce(|a, b| common_factor(&a, &b))
+            .map_or_else(|| Ticks::from([(0, 1)]), |h| common_factor(&h, &h));
+        Self::extract(
+            plane,
+            scatter.keys().copied().filter_map(NonZero::new).collect(),
+        )
+    }
+
     /// Unwrap into the underlying (already bounded) TEC.
     pub fn into_inner(self) -> TransEqClass<E> {
         self.0
@@ -248,4 +273,49 @@ impl<E: Event> Deref for BoundedTec<E> {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
+}
+
+// Widest Common Factor
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+/// Widest common set-factor `S` of `a` and `b`, i.e. `a = K_a (+) S` and
+/// `b = K_b (+) S`. Any common factor's support lies in `supp(a) & supp(b)`, so
+/// the shared ticks are tried widest-first and the first hit is widest.
+fn common_factor(a: &Ticks, b: &Ticks) -> Ticks {
+    let set = |s: BTreeSet<Tick>| -> Ticks { s.into_iter().map(|t| (t, 1)).collect() };
+    let mk = |pick: Vec<&Tick>| -> BTreeSet<Tick> {
+        std::iter::once(0)
+            .chain(pick.into_iter().copied())
+            .collect()
+    };
+    let cand: Vec<Tick> = a
+        .keys()
+        .copied()
+        .filter(|t| *t != 0 && b.contains_key(t))
+        .collect();
+    let widest = (0..=cand.len())
+        .rev()
+        .flat_map(|size| cand.iter().combinations(size))
+        .map(mk)
+        .find(|s| divides(s, a) && divides(s, b));
+    set(widest.unwrap_or_else(|| BTreeSet::from([0])))
+}
+
+/// Whether `divisor` divides `dividend` with a nonnegative quotient:
+/// `dividend = divisor (+) quotient`. Long division from the lowest term forces
+/// each quotient coefficient; a negative remainder rejects the divisor.
+fn divides(divisor: &BTreeSet<Tick>, dividend: &Ticks) -> bool {
+    let mut quotient: BTreeMap<Tick, i64> = dividend.iter().map(|(&t, &c)| (t, c as i64)).collect();
+    while let Some(&tick) = quotient.keys().next() {
+        let count = quotient[&tick];
+        for &step in divisor {
+            *quotient.entry(tick + step).or_default() -= count;
+        }
+        if quotient.values().any(|&c| c < 0) {
+            return false;
+        }
+        quotient.retain(|_, c| *c > 0);
+    }
+    true
 }
