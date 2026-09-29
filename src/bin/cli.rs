@@ -114,13 +114,8 @@ impl Linear {
         let description = format!("Linear from {}", self.input);
 
         let litematic = if let Some(wrap) = NonZero::new(self.wrap) {
-            let layout = StackedLinearLayout::new(
-                tracks,
-                Some(wrap),
-                self.gap,
-                self.floor.full(),
-                song_length,
-            );
+            let full = self.floor.full();
+            let layout = StackedLinearLayout::new(tracks, Some(wrap), self.gap, full, song_length);
             build_schematic(layout, Floor::None, description)
         } else {
             let layout = MultiLinearLayout::new(tracks, self.gap, song_length);
@@ -214,54 +209,51 @@ impl Match {
         let mut song = open_song(&self.input);
 
         // match on the raw file ticks: the output NBS keeps the original timing.
-        let timed_notes = song
+        let points = song
             .notes
             .iter()
             .map(|(pos, note)| (pos.into_tick(), note.tone));
-        let mut residual: TePlane<Tone> = TePlane::from_iter(timed_notes);
+        let mut residual: TePlane<Tone> = points.collect();
 
-        // normalize rules.
-        let rules = self.rules.into_iter().map(|Rule(mut scatter)| {
-            scatter.sort_unstable();
-            scatter.dedup();
-            scatter
-        });
+        // one TEC per rule, extracting from the shared residual in order.
+        let mut tecs: Vec<BoundedTec<Tone>> = self
+            .rules
+            .into_iter()
+            .map(|rule| extract_tec(&mut residual, rule))
+            .collect();
 
-        let mut tecs: Vec<BoundedTec<Tone>> = Vec::new();
-        // one TEC each.
-        for rule in rules {
-            let scatter: BTreeSet<_> = rule.into_iter().filter_map(NonZero::new).collect();
-            tecs.push(BoundedTec::extract_from(&mut residual, scatter));
-        }
         // keep the rest.
         if !residual.is_empty() {
-            let offsets = Default::default();
-            tecs.push(BoundedTec::new(TransEqClass::new(offsets, residual)));
+            let rest = TransEqClass::new(BTreeSet::new(), residual);
+            tecs.push(BoundedTec::new(rest));
         }
 
         // one layer group per TEC; `concat` leaves a blank layer between groups.
-        let groups = tecs.into_iter().map(|tec| {
-            let points = tec
-                .into_inner()
-                .expand()
-                .into_points()
-                .map(|(tick, tone)| (tick, Note::from(tone)));
-            Notes::<Position, Note>::pack_layers(points)
-                .into_iter()
-                .collect()
-        });
-        let notes: Notes<Position, Note> = Notes::concat(groups).collect();
-        let layers = notes
-            .keys()
-            .map(|pos| pos.into_layer())
-            .max()
-            .map_or(0, |last| last as usize + 1);
-
+        let notes: Notes<Position, Note> = Notes::concat(tecs.into_iter().map(tec_notes)).collect();
+        let last = notes.keys().map(|pos| pos.into_layer()).max();
         song.notes = notes;
-        song.layers = vec![Layer::default(); layers];
+        song.layers = vec![Layer::default(); last.map_or(0, |l| l as usize + 1)];
         song.header.song_name = format!("Match from {}", self.input);
         write_song(&self.output, song);
     }
+}
+
+/// Extracts one TEC from `residual` under a rule's offsets.
+fn extract_tec(residual: &mut TePlane<Tone>, Rule(scatter): Rule) -> BoundedTec<Tone> {
+    let scatter = scatter.into_iter().filter_map(NonZero::new).collect();
+    BoundedTec::extract_from(residual, scatter)
+}
+
+/// Packs a TEC's expansion onto its own layers.
+fn tec_notes(tec: BoundedTec<Tone>) -> Notes<Position, Note> {
+    let points = tec
+        .into_inner()
+        .expand()
+        .into_points()
+        .map(|(tick, tone)| (tick, Note::from(tone)));
+    Notes::<Position, Note>::pack_layers(points)
+        .into_iter()
+        .collect()
 }
 
 /// One match rule's offsets, slash-separated, e.g. "4/8".
