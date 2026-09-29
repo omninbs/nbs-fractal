@@ -174,7 +174,7 @@ impl Layout for TapLine {
     fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
         match pos.z == 0 {
             true => self.port(pos),
-            false => self.delays.get_block(pos - self.anchor),
+            false => self.delays.try_get_block(pos - self.anchor),
         }
     }
 
