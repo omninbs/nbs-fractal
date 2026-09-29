@@ -556,3 +556,45 @@ fn test_linear_layout() {
         .write_file("../rsnbs/fixtures/generated_linear.litematic")
         .unwrap();
 }
+
+#[test]
+fn test_restore_roundtrip() {
+    use crate::analysis::{BoundedTec, TePlane, TransEqClass};
+    use std::collections::BTreeSet;
+    use std::num::NonZero;
+
+    fn xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+    for _ in 0..2000 {
+        let mut scatter: BTreeSet<NonZero<u32>> = BTreeSet::new();
+        for t in 1..7u32 {
+            if xorshift(&mut state) % 2 == 0 {
+                scatter.insert(NonZero::new(t).unwrap());
+            }
+        }
+        let mut points: Vec<(u32, u8)> = Vec::new();
+        for tone in 0..3u8 {
+            let base = (xorshift(&mut state) % 4) as u32;
+            for t in 0..5u32 {
+                if xorshift(&mut state) % 3 != 0 {
+                    let mult = 1 + (xorshift(&mut state) % 2) as usize;
+                    for _ in 0..mult {
+                        points.push((base + t, tone));
+                    }
+                }
+            }
+        }
+        let kernel: TePlane<u8> = points.into_iter().collect();
+        let tec = TransEqClass::new(scatter, kernel);
+        let plane = tec.expand();
+        let restored = BoundedTec::restore(&plane);
+        let expanded = restored.into_inner().expand();
+        assert_eq!(expanded, plane);
+    }
+}

@@ -1,9 +1,8 @@
 //! Tapped delay line layout for NBS song projection.
 
-use super::{Arranged, Axis, CompactLayout, EdgeArranged, Facing, Layout, ToneBlocks, WireConn};
-use super::{
-    WithFloor, chain_block, observer, redstone_torch, redstone_wire, repeater, wire_state,
-};
+use super::{Arranged, Axis, CompactLayout, EdgeArranged};
+use super::{Facing, Layout, ToneBlocks, WireConn, WithFloor};
+use super::{chain_block, observer, redstone_torch, redstone_wire, repeater, wire_state};
 use crate::RedStoneTick;
 use crate::analysis::BoundedTec;
 use mcdata::{GenericBlockState, util::BlockPos};
