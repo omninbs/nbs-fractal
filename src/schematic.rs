@@ -7,10 +7,12 @@ use std::borrow::Cow;
 
 pub use self::blocks::*;
 pub use self::compact::*;
+pub use self::fishbone::*;
 pub use self::linear::*;
 pub use self::tapped::*;
 mod blocks;
 mod compact;
+mod fishbone;
 mod linear;
 mod tapped;
 
