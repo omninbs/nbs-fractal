@@ -328,6 +328,8 @@ pub fn repeater(
         name: "minecraft:repeater".into(),
         properties: HashMap::from([
             ("delay".into(), delay.into()),
+            // NOTE: a repeater's facing is backwards from the way it points.
+            //       Mojang's mysterious code?
             ("facing".into(), facing.invert().name().into()),
             ("locked".into(), locked.into()),
             ("powered".into(), powered.into()),
