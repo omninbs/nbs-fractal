@@ -7,7 +7,6 @@ use mcdata::GenericBlockState;
 use mcdata::util::BlockPos;
 use rsnbs::note::Tone;
 use rsnbs::types::{Tick, TimeAnchor};
-use std::iter::from_fn;
 
 // Shell: MultiFishboneLayout
 //
@@ -52,32 +51,36 @@ impl FishboneLayout {
     /// Splits a track's notes into as many fishbone lanes as needed, each
     /// group consuming up to two notes, keeping every cell up to `song_length`
     /// alive even when silent.
-    pub(crate) fn new<Trk, A, T>(notes: Trk, song_length: Tick) -> impl Iterator<Item = Self>
+    pub fn new<Trk, A, T>(notes: Trk, song_length: Tick) -> impl Iterator<Item = Self>
     where
         Trk: IntoIterator<Item = (A, T)>,
         A: TimeAnchor,
         T: Into<Tone>,
     {
-        // File each note into its cell's tick group, keeping the track long
-        // enough to match the song even where it stays silent.
-        let min = song_length
-            .checked_sub(1)
-            .map_or(0, |tick| (tick / 4 + 1) as usize);
-        let mut cells: Vec<[Vec<Tone>; 4]> = Vec::new();
+        // File each note into its cell's tick group, keeping every cell up to
+        // `song_length` alive even when silent.
+        let mut cells: Vec<[Vec<Tone>; 4]> =
+            vec![Default::default(); song_length.div_ceil(4) as usize];
         for (anchor, note) in notes {
             let tick = anchor.into_tick() as usize;
             cells.resize_with(cells.len().max(tick / 4 + 1), Default::default);
             cells[tick / 4][tick % 4].push(note.into());
         }
-        cells.resize_with(cells.len().max(min), Default::default);
 
-        // Emit one lane per pass, each group draining up to two notes.
-        from_fn(move || {
-            let live = cells.iter().flatten().any(|queue| !queue.is_empty());
-            live.then(|| {
-                let templates = cells.iter_mut().map(Template::take);
-                Self(EvenlyArranged::new(templates, BlockPos::new(0, 0, 2)))
-            })
+        // The deepest group fixes the lane count, two of its notes per lane.
+        let deepest = cells.iter().flatten().map(Vec::len).max().unwrap_or(0);
+        let mut lanes = vec![Vec::new(); deepest.div_ceil(2)];
+        for groups in cells.into_iter() {
+            for (lane, column) in lanes.iter_mut().enumerate() {
+                let at = 2 * lane;
+                let pair = |g: &Vec<Tone>| [g.get(at).copied(), g.get(at + 1).copied()];
+                column.push(groups.each_ref().map(pair));
+            }
+        }
+
+        lanes.into_iter().map(|columns| {
+            let templates = columns.into_iter().map(Template::new);
+            Self(EvenlyArranged::new(templates, BlockPos::new(0, 0, 2)))
         })
     }
 }
@@ -103,13 +106,8 @@ struct Template {
 }
 
 impl Template {
-    /// Drains up to two queued notes per group into a fresh template.
-    fn take(cell: &mut [Vec<Tone>; 4]) -> Self {
-        let groups = std::array::from_fn(|g| {
-            let count = cell[g].len().min(2);
-            let mut drain = cell[g].drain(..count);
-            [drain.next(), drain.next()]
-        });
+    /// Builds a template from a cell's four groups.
+    fn new(groups: [[Option<Tone>; 2]; 4]) -> Self {
         Self { groups }
     }
 
