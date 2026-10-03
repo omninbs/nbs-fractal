@@ -32,7 +32,7 @@ impl MultiLinearLayout {
         let scale = ScaleMode::from_tracks(&tracks);
         let layouts = tracks.into_iter().flat_map(|notes| {
             let cells = Cells::new(notes, scale, song_length);
-            LinearLayout::new(cells, scale, None, 0)
+            LinearLayout::from_cells(cells, scale, None, 0)
         });
         let pitch = BlockPos::new(scale.width() + gap as i32, 0, 0);
         Self(EvenlyArranged::new(layouts, pitch))
@@ -68,7 +68,7 @@ impl StackedLinearLayout {
         let scale = ScaleMode::from_tracks(&tracks);
         let layouts = tracks.into_iter().flat_map(|notes| {
             let cells = Cells::new(notes, scale, song_length);
-            let layer = LinearLayout::new(cells, scale, wrap_length, gap);
+            let layer = LinearLayout::from_cells(cells, scale, wrap_length, gap);
             layer.map(|layout| WithFloor::new(layout, full))
         });
         let pitch = BlockPos::new(0, 4, 0);
@@ -93,8 +93,27 @@ impl AsLayout for StackedLinearLayout {
 pub struct LinearLayout(Clipped<EvenlyArranged<Row>>);
 
 impl LinearLayout {
+    /// Create a single-track linear layout from its notes.
+    pub fn new<Trk, A, T>(
+        notes: Trk,
+        wrap_length: Option<NonZero<usize>>,
+        gap: u32,
+        song_length: Tick,
+    ) -> impl Iterator<Item = Self>
+    where
+        Trk: IntoIterator<Item = (A, T)>,
+        A: TimeAnchor,
+        T: Into<Tone>,
+        for<'a> &'a Trk: IntoIterator<Item = (&'a A, &'a T)>,
+    {
+        let ticks = IntoIterator::into_iter(&notes).map(|(anchor, _)| (*anchor).into_tick());
+        let scale = ScaleMode::new(ticks);
+        let cells = Cells::new(notes, scale, song_length);
+        Self::from_cells(cells, scale, wrap_length, gap)
+    }
+
     /// Lays a pre-filed cell container out into lanes.
-    pub(crate) fn new(
+    pub(crate) fn from_cells(
         mut cells: Cells,
         scale: ScaleMode,
         wrap_length: Option<NonZero<usize>>,
