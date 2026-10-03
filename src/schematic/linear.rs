@@ -286,6 +286,11 @@ impl ScaleMode {
         }
     }
 
+    /// Whether the branch region is driven by a piston press.
+    const fn is_piston(self) -> bool {
+        matches!(self, Self::Scale3 | Self::Scale1)
+    }
+
     pub fn cell_slot(self, tick: Tick) -> (usize, bool) {
         let tick = tick / self.scale();
         let branch = tick % 2 == 1;
@@ -310,24 +315,27 @@ struct Template {
     south_bound: bool,
 }
 
-/// Notes outside the two fixed main-line slots.
+/// Notes carried past the two fixed main-line slots.
+///
+/// A repeater branch carries three notes, a piston branch two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Branch {
-    /// The third main-line note.
+    /// No branch-line notes: the branch region carries the third main note.
     Unbranched(Option<Tone>),
-    /// The two branch-line notes.
-    Branched([Option<Tone>; 2]),
+    /// Repeater branch line: up to three notes.
+    Repeater([Option<Tone>; 3]),
+    /// Piston branch line: up to two notes.
+    Piston([Option<Tone>; 2]),
 }
 
 impl Template {
     /// Takes one cell out of the region.
     fn new(cell: &mut Cell, scale: ScaleMode, south_bound: bool) -> Self {
-        let main_notes = &mut cell.main;
-        let branch_notes = &mut cell.branch;
-        let main = [main_notes.next(), main_notes.next()];
-        let branch = match branch_notes.next() {
-            Some(first) => Branch::Branched([Some(first), branch_notes.next()]),
-            None => Branch::Unbranched(main_notes.next()),
+        let main = [cell.main.next(), cell.main.next()];
+        let branch = match cell.branch.next() {
+            None => Branch::Unbranched(cell.main.next()),
+            Some(first) if scale.is_piston() => Branch::Piston([Some(first), cell.branch.next()]),
+            Some(first) => Branch::Repeater([Some(first), cell.branch.next(), cell.branch.next()]),
         };
 
         Self {
@@ -341,35 +349,37 @@ impl Template {
 
 impl Layout for Template {
     fn block_at(&self, pos: BlockPos) -> Option<GenericBlockState> {
-        use self::{Branch::*, Facing::*, ScaleMode::*};
+        use self::{Branch::*, Facing::*};
         let local_z = if self.south_bound { pos.z } else { 2 - pos.z };
         let local_x = self.scale.width() - pos.x - 1;
         let facing = if self.south_bound { South } else { North };
         let main_repeater = || repeater(self.scale.scale().to_string(), facing, false, false);
         let branch_repeater = || repeater((self.scale.scale() / 2).to_string(), West, false, false);
-        match (self.scale, self.branch, local_x, pos.y, local_z) {
-            (_any_scale, _any_branch, 1, 0, 0) => Some(chain_block()),
-            (_any_scale, _any_branch, 1, 1, 0) => Some(main_repeater()),
-            (_any_scale, _any_branch, 1, 0, 1) => Some(inst_block(self.main[0], chain_block)),
-            (_any_scale, _any_branch, 1, 1, 1) => Some(note_block(self.main[0], chain_block)),
-            (_any_scale, _any_branch, 0, 0, 1) => Some(inst_block(self.main[1], air)),
-            (_any_scale, _any_branch, 0, 1, 1) => Some(note_block(self.main[1], air)),
-            (_any_scale, Unbranched(note), 2, 0, 1) => Some(inst_block(note, air)),
-            (_any_scale, Unbranched(note), 2, 1, 1) => Some(note_block(note, air)),
+        match (self.branch, local_x, pos.y, local_z) {
+            (_any_branch, 1, 0, 0) => Some(chain_block()),
+            (_any_branch, 1, 1, 0) => Some(main_repeater()),
+            (_any_branch, 1, 0, 1) => Some(inst_block(self.main[0], chain_block)),
+            (_any_branch, 1, 1, 1) => Some(note_block(self.main[0], chain_block)),
+            (_any_branch, 0, 0, 1) => Some(inst_block(self.main[1], air)),
+            (_any_branch, 0, 1, 1) => Some(note_block(self.main[1], air)),
+            (Unbranched(note), 2, 0, 1) => Some(inst_block(note, air)),
+            (Unbranched(note), 2, 1, 1) => Some(note_block(note, air)),
 
-            (Scale4 | Scale2, Branched(_), 2, 0, 1) => Some(chain_block()),
-            (Scale4 | Scale2, Branched(_), 2, 1, 1) => Some(branch_repeater()),
-            (Scale4 | Scale2, Branched(b), 3, 0, 1) => Some(inst_block(b[0], chain_block)),
-            (Scale4 | Scale2, Branched(b), 3, 1, 1) => Some(note_block(b[0], chain_block)),
-            (Scale4 | Scale2, Branched(b), 4, 0, 1) => Some(inst_block(b[1], air)),
-            (Scale4 | Scale2, Branched(b), 4, 1, 1) => Some(note_block(b[1], air)),
+            (Repeater(_), 2, 0, 1) => Some(chain_block()),
+            (Repeater(_), 2, 1, 1) => Some(branch_repeater()),
+            (Repeater(b), 3, 0, 1) => Some(inst_block(b[0], chain_block)),
+            (Repeater(b), 3, 1, 1) => Some(note_block(b[0], chain_block)),
+            (Repeater(b), 4, 0, 1) => Some(inst_block(b[1], air)),
+            (Repeater(b), 4, 1, 1) => Some(note_block(b[1], air)),
+            (Repeater(b), 3, 0, 2) => Some(inst_block(b[2], air)),
+            (Repeater(b), 3, 1, 2) => Some(note_block(b[2], air)),
 
-            (Scale3 | Scale1, Branched(_), 2, 1, 1) => Some(sticky_piston("west")),
-            (Scale3 | Scale1, Branched(_), 3, 1, 1) => Some(redstone_block()),
-            (Scale3 | Scale1, Branched(b), 5, 0, 1) => Some(inst_block(b[0], air)),
-            (Scale3 | Scale1, Branched(b), 5, 1, 1) => Some(note_block(b[0], air)),
-            (Scale3 | Scale1, Branched(b), 4, 0, 2) => Some(inst_block(b[1], air)),
-            (Scale3 | Scale1, Branched(b), 4, 1, 2) => Some(note_block(b[1], air)),
+            (Piston(_), 2, 1, 1) => Some(sticky_piston("west")),
+            (Piston(_), 3, 1, 1) => Some(redstone_block()),
+            (Piston(b), 5, 0, 1) => Some(inst_block(b[0], air)),
+            (Piston(b), 5, 1, 1) => Some(note_block(b[0], air)),
+            (Piston(b), 4, 0, 2) => Some(inst_block(b[1], air)),
+            (Piston(b), 4, 1, 2) => Some(note_block(b[1], air)),
 
             _ => None,
         }
