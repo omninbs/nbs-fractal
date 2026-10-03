@@ -1,7 +1,7 @@
 use clap::Parser;
 use nbs_fractal::analysis::reuse::{plan_to_tecs, reuse_flow};
 use nbs_fractal::analysis::{BoundedTec, TePlane, TransEqClass};
-use nbs_fractal::schematic::{Layout, MultiCompactLayout, MultiLinearLayout};
+use nbs_fractal::schematic::{Layout, MultiCompactLayout, MultiFishboneLayout, MultiLinearLayout};
 use nbs_fractal::schematic::{StackedLinearLayout, TappedLayout, WithFloor};
 use rsnbs::note::{Note, Notes, Tone};
 use rsnbs::song::{Layer, Song};
@@ -24,6 +24,7 @@ use std::str::FromStr;
 enum Cli {
     Compact(Compact),
     Linear(Linear),
+    Fishbone(Fishbone),
     Decompose(Decompose),
     Match(Match),
     Tapped(Tapped),
@@ -33,6 +34,7 @@ fn main() {
     match Cli::parse() {
         Cli::Compact(cmd) => cmd.run(),
         Cli::Linear(cmd) => cmd.run(),
+        Cli::Fishbone(cmd) => cmd.run(),
         Cli::Decompose(cmd) => cmd.run(),
         Cli::Match(cmd) => cmd.run(),
         Cli::Tapped(cmd) => cmd.run(),
@@ -123,6 +125,42 @@ impl Linear {
             let layout = MultiLinearLayout::new(tracks, self.gap, song_length);
             build_schematic(layout, self.floor, description)
         };
+        write_output(&self.output, litematic);
+    }
+}
+
+// Fishbone
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+/// Fishbone layout, consuming the song's native ticks as-is (no retick).
+#[derive(clap::Args)]
+struct Fishbone {
+    /// Path to input NBS file
+    input: String,
+    /// Path to output litematic file
+    #[arg(default_value = "out/generated_fishbone.litematic")]
+    output: String,
+    /// Block spacing between adjacent tracks (0 = interlocked)
+    #[arg(short, long, default_value_t = 0)]
+    gap: u32,
+    /// Floor platform mode
+    #[arg(short = 'F', long, value_enum, default_value_t)]
+    floor: Floor,
+}
+
+impl Fishbone {
+    fn run(self) {
+        let song = open_song(&self.input);
+        let notes: Notes = song.notes;
+        let song_length = notes
+            .last_key_value()
+            .map(|(pos, _)| pos.into_tick() + 1)
+            .unwrap_or(0);
+        let tracks: Vec<Notes> = notes.split_by_layer_gaps();
+        let layout = MultiFishboneLayout::new(tracks, self.gap, song_length);
+        let description = format!("Fishbone from {}", self.input);
+        let litematic = build_schematic(layout, self.floor, description);
         write_output(&self.output, litematic);
     }
 }
