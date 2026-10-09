@@ -1,6 +1,6 @@
 [package]
 name = "nbs-fractal"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["kemiamu <kemya@tuta.io>"]
 edition = "2024"
 repository = "https://github.com/omninbs/nbs-fractal"
@@ -11,7 +11,7 @@ keywords = ["nbs", "music", "minecraft", "redstone"]
 categories = ["games"]
 
 [dependencies]
-rsnbs = "0.1.4"
+rsnbs = "0.1.5"
 clap = { version = "4.6.1", features = ["derive"] }
 counter = "0.7.1"
 itertools = "0.15.0"

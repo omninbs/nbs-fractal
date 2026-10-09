@@ -1,7 +1,7 @@
 use crate::schematic::Layout;
 use counter::Counter;
 use ordered_float::OrderedFloat;
-use rsnbs::note::{Note, Notes, Tone};
+use rsnbs::note::{Note, NoteStreamExt, Notes, Tone};
 use rsnbs::song::Song;
 use rsnbs::types::{LayerAnchor, Position, Tick, TimeAnchor};
 
@@ -170,10 +170,9 @@ fn test_analyze_transposition_equivalence() {
         remaining_notes.push((tick, note));
     }
 
-    song.notes = Notes::from_iter(Notes::concat([
-        Notes::from_iter(Notes::pack_layers(matched_notes)),
-        Notes::from_iter(Notes::pack_layers(remaining_notes)),
-    ]));
+    let matched: Notes<Position, Note> = matched_notes.into_iter().pack_layers().collect();
+    let remaining: Notes<Position, Note> = remaining_notes.into_iter().pack_layers().collect();
+    song.notes = Notes::from_iter([matched, remaining].into_iter().concat());
     song.header.is_loop = true;
     song.save_nbs("../rsnbs/fixtures/transposition.nbs")
         .unwrap();
@@ -356,10 +355,9 @@ pub fn test_deconvolve_d1() {
         }
     }
 
-    song.notes = Notes::from_iter(Notes::concat([
-        Notes::from_iter(Notes::pack_layers(matched)),
-        Notes::from_iter(Notes::pack_layers(remaining)),
-    ]));
+    let matched: Notes<Position, Note> = matched.into_iter().pack_layers().collect();
+    let remaining: Notes<Position, Note> = remaining.into_iter().pack_layers().collect();
+    song.notes = Notes::from_iter([matched, remaining].into_iter().concat());
     song.header.is_loop = true;
     song.save_nbs("../rsnbs/fixtures/deconvolve.nbs").unwrap();
 }
@@ -491,10 +489,9 @@ pub fn test_deconvolve() {
         }
     }
 
-    song.notes = Notes::from_iter(Notes::concat([
-        Notes::from_iter(Notes::pack_layers(matched)),
-        Notes::from_iter(Notes::pack_layers(remaining)),
-    ]));
+    let matched: Notes<Position, Note> = matched.into_iter().pack_layers().collect();
+    let remaining: Notes<Position, Note> = remaining.into_iter().pack_layers().collect();
+    song.notes = Notes::from_iter([matched, remaining].into_iter().concat());
     song.header.is_loop = true;
     song.save_nbs("../rsnbs/fixtures/deconvolve.nbs").unwrap();
 }

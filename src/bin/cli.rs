@@ -3,7 +3,7 @@ use nbs_fractal::analysis::reuse::{plan_to_tecs, reuse_flow};
 use nbs_fractal::analysis::{BoundedTec, TePlane, TransEqClass};
 use nbs_fractal::schematic::{Layout, MultiCompactLayout, MultiFishboneLayout, MultiLinearLayout};
 use nbs_fractal::schematic::{StackedLinearLayout, TappedLayout, WithFloor};
-use rsnbs::note::{Note, Notes, Tone};
+use rsnbs::note::{Note, NoteStreamExt, Notes, Tone};
 use rsnbs::song::{Layer, Song};
 use rsnbs::types::{LayerAnchor, Position, Tick, TimeAnchor};
 use rustmatica::Litematic;
@@ -289,9 +289,7 @@ fn tec_notes(tec: BoundedTec<Tone>) -> Notes<Position, Note> {
         .expand()
         .into_points()
         .map(|(tick, tone)| (tick, Note::from(tone)));
-    Notes::<Position, Note>::pack_layers(points)
-        .into_iter()
-        .collect()
+    points.pack_layers().collect()
 }
 
 /// Rewrites `song` with one layer group per TEC and writes it as an NBS.
@@ -299,7 +297,7 @@ fn tec_notes(tec: BoundedTec<Tone>) -> Notes<Position, Note> {
 /// Each TEC's expansion is packed onto its own layers; `concat` leaves a
 /// blank layer between groups. Original layer assignments are discarded.
 fn write_tec_groups(mut song: Song, tecs: Vec<BoundedTec<Tone>>, output: &str, name: String) {
-    let notes: Notes<Position, Note> = Notes::concat(tecs.into_iter().map(tec_notes)).collect();
+    let notes: Notes<Position, Note> = tecs.into_iter().map(tec_notes).concat().collect();
     let last = notes.keys().map(|pos| pos.into_layer()).max();
     song.notes = notes;
     song.layers = vec![Layer::default(); last.map_or(0, |l| l as usize + 1)];
