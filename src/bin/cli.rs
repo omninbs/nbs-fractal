@@ -70,13 +70,14 @@ struct Compact {
 impl Compact {
     fn run(self) {
         let song = open_song(&self.input);
-        let notes = song
-            .notes
-            .rescale_to_game_tick(song.header.tempo)
-            .map(|(pos, note)| (pos.into_tick(), note));
-        let tracks = std::iter::once((notes, NonZero::new(self.coarse)));
-        let layout =
-            MultiCompactLayout::new(tracks, NonZero::new(self.wrap), self.gap, self.full_floor);
+        let track = |group: Notes| {
+            let notes = group.rescale_to_game_tick(song.header.tempo);
+            let notes = notes.map(|(pos, note)| (pos.into_tick(), note));
+            (notes, NonZero::new(self.coarse))
+        };
+        let tracks = song.notes.split_by_layer_gaps().into_iter().map(track);
+        let wrap_length = NonZero::new(self.wrap);
+        let layout = MultiCompactLayout::new(tracks, wrap_length, self.gap, self.full_floor);
         let description = format!("Compact from {}", self.input);
         let litematic = build_schematic(layout, Floor::None, description);
         write_output(&self.output, litematic);
@@ -207,9 +208,7 @@ impl Decompose {
         // 层保留。
         let (tecs, skipped) = plan_to_tecs(plan, residual);
         if skipped > 0 {
-            eprintln!(
-                "decompose: skipped {skipped} layer(s) below the tapped granularity, absorbed into residual"
-            );
+            eprintln!("decompose: skipped {skipped} layer(s) below tapped granularity");
         }
         let tecs: Vec<BoundedTec<Tone>> = tecs.into_iter().map(BoundedTec::new).collect();
 
@@ -357,21 +356,18 @@ impl Tapped {
         // first is fine as long as multiplicities are kept: folding into a
         // position-keyed `Notes` map would overwrite the notes that collapse
         // onto one redstone tick and so erase the `K (+) S` factor.
+        let restore = |group: Notes| {
+            let notes = group.into_iter().map(|(p, n)| (p, n.tone));
+            let notes: Notes<Position, Tone> = notes.collect();
+            let ticks = notes.rescale_to_redstone_tick(song.header.tempo);
+            let plane: TePlane<Tone> = ticks.map(|(p, t)| (p.into_tick(), t)).collect();
+            BoundedTec::restore(&plane)
+        };
         let tecs: Vec<BoundedTec<Tone>> = song
             .notes
             .split_by_layer_gaps()
             .into_iter()
-            .map(|group| {
-                let notes: Notes<Position, Tone> = group
-                    .into_iter()
-                    .map(|(pos, note)| (pos, note.tone))
-                    .collect();
-                let plane: TePlane<Tone> = notes
-                    .rescale_to_redstone_tick(song.header.tempo)
-                    .map(|(pos, tone)| (pos.into_tick(), tone))
-                    .collect();
-                BoundedTec::restore(&plane)
-            })
+            .map(restore)
             .collect();
 
         let layout = TappedLayout::new(tecs, NonZero::new(self.wrap), self.gap, self.full_floor);
