@@ -2,7 +2,7 @@
 
 use super::{AsLayout, Clipped, EvenlyArranged, Facing, Layout, Overlaid, WithFloor};
 use super::{air, chain_block, inst_block, note_block, redstone_wire, repeater};
-use crate::{GameTick, RedStoneTick};
+use crate::RedStoneTick;
 use mcdata::{GenericBlockState, util::BlockPos};
 use rsnbs::note::Tone;
 use rsnbs::types::Tick;
@@ -17,7 +17,8 @@ use std::num::NonZero;
 pub struct MultiCompactLayout(EvenlyArranged<WithFloor<CompactLayout>>);
 
 impl MultiCompactLayout {
-    /// Create a multi-track compact layout from multiple note groups.
+    /// Create a multi-track compact layout from multiple redstone note groups,
+    /// one [`CompactLayout`] line per group.
     pub fn new<Trks, Trk, T>(
         tracks: Trks,
         wrap_length: Option<NonZero<usize>>,
@@ -26,13 +27,10 @@ impl MultiCompactLayout {
     ) -> Self
     where
         Trks: IntoIterator<Item = (Trk, Option<NonZero<RedStoneTick>>)>,
-        Trk: IntoIterator<Item = (GameTick, T)>,
+        Trk: IntoIterator<Item = (RedStoneTick, T)>,
         T: Into<Tone>,
     {
-        let lines = tracks
-            .into_iter()
-            .flat_map(|(notes, coarse)| split_even_odd(notes, coarse));
-        let layers = lines.map(|(notes, coarse)| {
+        let layers = tracks.into_iter().map(|(notes, coarse)| {
             let line = CompactLayout::new(notes, coarse, wrap_length, gap);
             WithFloor::new(line, full)
         });
@@ -44,21 +42,6 @@ impl AsLayout for MultiCompactLayout {
     fn as_layout(&self) -> &impl Layout {
         &self.0
     }
-}
-
-/// Splits game tick notes into even and odd redstone tick lines.
-fn split_even_odd<I: IntoIterator<Item = (GameTick, T)>, T: Into<Tone>>(
-    notes: I,
-    coarse: Option<NonZero<Tick>>,
-) -> impl Iterator<Item = (Vec<(RedStoneTick, Tone)>, Option<NonZero<Tick>>)> {
-    let mut lines: [Vec<(RedStoneTick, Tone)>; 2] = Default::default();
-    for (game_tick, note) in notes {
-        lines[(game_tick % 2) as usize].push((game_tick / 2, note.into()));
-    }
-    lines
-        .into_iter()
-        .filter(|line| !line.is_empty())
-        .map(move |line| (line, coarse))
 }
 
 // Layout: CompactLayout & Row

@@ -65,23 +65,68 @@ struct Compact {
     /// Add a full floor platform below the build
     #[arg(short, long)]
     full_floor: bool,
+    /// Split even/odd game ticks into separate tracks
+    #[arg(long)]
+    halves: bool,
+    /// Split the song into tracks on blank layers
+    #[arg(short = 'b', long)]
+    breaks: bool,
 }
 
 impl Compact {
     fn run(self) {
         let song = open_song(&self.input);
-        let track = |group: Notes| {
-            let notes = group.rescale_to_game_tick(song.header.tempo);
-            let notes = notes.map(|(pos, note)| (pos.into_tick(), note));
-            (notes, NonZero::new(self.coarse))
+        let tempo = song.header.tempo;
+        let coarse = NonZero::new(self.coarse);
+        let groups = match self.breaks {
+            true => song.notes.split_by_layer_gaps(),
+            false => vec![song.notes],
         };
-        let tracks = song.notes.split_by_layer_gaps().into_iter().map(track);
+        let tracks = groups
+            .into_iter()
+            .flat_map(|group| group_lines(group, tempo, self.halves, coarse));
         let wrap_length = NonZero::new(self.wrap);
         let layout = MultiCompactLayout::new(tracks, wrap_length, self.gap, self.full_floor);
         let description = format!("Compact from {}", self.input);
         let litematic = build_schematic(layout, Floor::None, description);
         write_output(&self.output, litematic);
     }
+}
+
+/// Rescales one note group and breaks it into coarseness-tagged redstone lines.
+///
+/// With `halves` the group is rescaled to game ticks (20 t/s) and the two game
+/// ticks sharing a redstone tick go to separate lines; otherwise it is rescaled
+/// to redstone ticks (10 t/s) and collapses onto a single line.
+fn group_lines(
+    group: Notes,
+    tempo: f32,
+    halves: bool,
+    coarse: Option<NonZero<Tick>>,
+) -> impl Iterator<Item = (Vec<(Tick, Note)>, Option<NonZero<Tick>>)> {
+    let rate = if halves { 20 } else { 10 };
+    let notes = group.rescale_to_tick_rate(tempo, rate);
+    let notes = notes.map(|(pos, note)| (pos.into_tick(), note));
+    let lines = match halves {
+        true => split_halves(notes).to_vec(),
+        false => vec![notes.collect()],
+    };
+    lines
+        .into_iter()
+        .filter(|line| !line.is_empty())
+        .map(move |line| (line, coarse))
+}
+
+/// Splits a game-tick note stream into two redstone lines by tick parity.
+fn split_halves<I, T>(notes: I) -> [Vec<(Tick, T)>; 2]
+where
+    I: IntoIterator<Item = (Tick, T)>,
+{
+    let mut lines: [Vec<(Tick, T)>; 2] = Default::default();
+    for (tick, note) in notes {
+        lines[(tick % 2) as usize].push((tick / 2, note));
+    }
+    lines
 }
 
 // Linear
@@ -105,6 +150,9 @@ struct Linear {
     /// Floor platform mode
     #[arg(short = 'F', long, value_enum, default_value_t)]
     floor: Floor,
+    /// Split the song into tracks on blank layers
+    #[arg(short = 'b', long)]
+    breaks: bool,
 }
 
 impl Linear {
@@ -115,7 +163,10 @@ impl Linear {
             .last_key_value()
             .map(|(pos, _)| pos.into_tick() + 1)
             .unwrap_or(0);
-        let tracks: Vec<Notes> = notes.split_by_layer_gaps();
+        let tracks: Vec<Notes> = match self.breaks {
+            true => notes.split_by_layer_gaps(),
+            false => vec![notes],
+        };
         let description = format!("Linear from {}", self.input);
 
         let litematic = if let Some(wrap) = NonZero::new(self.wrap) {
@@ -148,6 +199,9 @@ struct Fishbone {
     /// Floor platform mode
     #[arg(short = 'F', long, value_enum, default_value_t)]
     floor: Floor,
+    /// Split the song into tracks on blank layers
+    #[arg(short = 'b', long)]
+    breaks: bool,
 }
 
 impl Fishbone {
@@ -158,7 +212,10 @@ impl Fishbone {
             .last_key_value()
             .map(|(pos, _)| pos.into_tick() + 1)
             .unwrap_or(0);
-        let tracks: Vec<Notes> = notes.split_by_layer_gaps();
+        let tracks: Vec<Notes> = match self.breaks {
+            true => notes.split_by_layer_gaps(),
+            false => vec![notes],
+        };
         let layout = MultiFishboneLayout::new(tracks, self.gap, song_length);
         let description = format!("Fishbone from {}", self.input);
         let litematic = build_schematic(layout, self.floor, description);
