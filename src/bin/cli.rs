@@ -150,9 +150,9 @@ struct Linear {
     /// Floor platform mode
     #[arg(short = 'F', long, value_enum, default_value_t)]
     floor: Floor,
-    /// Split the song into tracks on blank layers
-    #[arg(short = 'b', long)]
-    breaks: bool,
+    /// Keep the song on one track, ignoring blank layers
+    #[arg(short = 'B', long = "no-breaks")]
+    no_breaks: bool,
 }
 
 impl Linear {
@@ -163,9 +163,9 @@ impl Linear {
             .last_key_value()
             .map(|(pos, _)| pos.into_tick() + 1)
             .unwrap_or(0);
-        let tracks: Vec<Notes> = match self.breaks {
-            true => notes.split_by_layer_gaps(),
-            false => vec![notes],
+        let tracks: Vec<Notes> = match self.no_breaks {
+            true => vec![notes],
+            false => notes.split_by_layer_gaps(),
         };
         let description = format!("Linear from {}", self.input);
 
@@ -199,9 +199,9 @@ struct Fishbone {
     /// Floor platform mode
     #[arg(short = 'F', long, value_enum, default_value_t)]
     floor: Floor,
-    /// Split the song into tracks on blank layers
-    #[arg(short = 'b', long)]
-    breaks: bool,
+    /// Keep the song on one track, ignoring blank layers
+    #[arg(short = 'B', long = "no-breaks")]
+    no_breaks: bool,
 }
 
 impl Fishbone {
@@ -212,9 +212,9 @@ impl Fishbone {
             .last_key_value()
             .map(|(pos, _)| pos.into_tick() + 1)
             .unwrap_or(0);
-        let tracks: Vec<Notes> = match self.breaks {
-            true => notes.split_by_layer_gaps(),
-            false => vec![notes],
+        let tracks: Vec<Notes> = match self.no_breaks {
+            true => vec![notes],
+            false => notes.split_by_layer_gaps(),
         };
         let layout = MultiFishboneLayout::new(tracks, self.gap, song_length);
         let description = format!("Fishbone from {}", self.input);
