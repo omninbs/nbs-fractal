@@ -2,9 +2,9 @@
 
 use super::blocks::{Facing, WireConn, chain_block, inst_block, note_block, repeater};
 use super::blocks::{redstone_block, sticky_piston, wire_state};
-use super::{Clipped, EvenlyArranged, Layout, Overlaid, Provided, WithFloor, air};
-use crate::{BlockState, forward_layout};
-use mcdata::util::BlockPos;
+use super::compose::{Clipped, EvenlyArranged, Overlaid, Provided, WithFloor};
+use super::{Layout, air};
+use crate::{BlockPos, BlockState, forward_layout};
 use rsnbs::note::Tone;
 use rsnbs::types::{Tick, TimeAnchor};
 use std::{collections::HashSet, iter::from_fn, num::NonZero, vec::IntoIter as VecIter};

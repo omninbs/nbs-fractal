@@ -1,15 +1,15 @@
 //! Torrent layout for NBS song projection.
 
 use super::blocks::{Facing, WireConn, chain_block, inst_block, note_block, repeater, wire_state};
-use super::{EvenlyArranged, Layout, Overlaid, air, include};
-use crate::BlockState;
-use crate::playable;
-use mcdata::util::BlockPos;
+use super::compose::{EvenlyArranged, Overlaid};
+use super::{Layout, air};
+use crate::{BlockPos, BlockState, playable};
+use litematica::model::document::Document;
+use litematica::task::decompress::gzip_with_limit;
 use rsnbs::note::{Note, Tone};
 use rsnbs::types::TimeAnchor;
-use rustmatica::Litematic;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::iter;
+use std::{iter, sync::LazyLock};
 
 // Layout: TorrentLayout
 //
@@ -102,7 +102,7 @@ impl TorrentLayout {
         let anchor = BlockPos::new(0, 0, linkage.size_with(&tracks).z - 1);
         let slices = slices.into_iter().map(|slots| Template { slots });
         let slices = EvenlyArranged::new(slices, BlockPos::new(0, 0, 2), &tracks);
-        let span = include(linkage.size_with(&tracks), slices.size_with(&tracks));
+        let span = linkage.size_with(&tracks).max(slices.size_with(&tracks));
         let size = BlockPos::new(span.x, span.y, anchor.z + slices.size_with(&tracks).z);
         let inner = Overlaid::new(BlockPos::ORIGIN, linkage, anchor, slices, size, &tracks);
         Self { tracks, inner }
@@ -236,36 +236,52 @@ impl Layout<()> for TorrentLayout {
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
+/// The built-in startup projection, embedded beside this file as written.
+const LINKAGE_BYTES: &[u8] = include_bytes!("torrent_linkage.litematic");
+
 /// The fixed startup that sets every track running together: the distribution
 /// network and its per-track risers, confirmed on a real build and embedded here
 /// whole as a projection, read back block by block.
-struct Linkage(Litematic<mcdata::GenericBlockState>);
+///
+/// The buffer is decompressed once for the whole process into a static, so the
+/// borrowing [`Document`] outlives the call that loads it without any leak;
+/// every later read is a compact random access into the packed palette
+/// identifiers.
+struct Linkage(Document<'static>);
+
+/// The built-in projection's decompressed NBT, shared by every [`Linkage`].
+static LINKAGE_NBT: LazyLock<Vec<u8>> = LazyLock::new(|| {
+    gzip_with_limit(LINKAGE_BYTES, Linkage::LIMIT).expect("built-in linkage is valid")
+});
 
 impl Linkage {
+    /// Caps the decompressed size of the built-in projection.
+    const LIMIT: u64 = 64 * 1024 * 1024;
+
     /// Loads the built-in startup from the projection embedded beside this file.
     fn new() -> Self {
-        const BYTES: &[u8] = include_bytes!("torrent_linkage.litematic");
-        let litematic = Litematic::from_bytes(BYTES).expect("built-in linkage is valid");
-        Self(litematic)
+        Self(Document::parse(&LINKAGE_NBT).expect("built-in linkage is valid"))
     }
 }
 
 impl<Ctx> Layout<Ctx> for Linkage {
     fn block_at_with(&self, pos: BlockPos, _ctx: &Ctx) -> Option<BlockState> {
-        Some(self.0.regions[0].get_block(pos).clone().into())
+        self.0.regions[0].state_at(pos).cloned()
     }
 
     fn size_with(&self, _ctx: &Ctx) -> BlockPos {
-        self.0.enclosing_size()
+        let size = self.0.regions[0].size();
+        let axis = |value: u32| i32::try_from(value).expect("region size fits BlockPos");
+        BlockPos::new(axis(size.x), axis(size.y), axis(size.z))
     }
 
     /// The embedded projection's own palette, read straight back out.
     fn block_palette_with(&self, _ctx: &Ctx) -> HashSet<BlockState> {
         self.0.regions[0]
-            .block_palette()
+            .palette()
+            .states()
             .iter()
             .cloned()
-            .map(Into::into)
             .collect()
     }
 }

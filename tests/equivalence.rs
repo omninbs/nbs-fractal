@@ -1,11 +1,10 @@
-//! The streaming writer must reproduce the rustmatica reference projection.
+//! The adapted writer must round-trip through `litematica`'s reader.
 
 use itertools::iproduct;
-use mcdata::util::BlockPos;
-use nbs_fractal::BlockState;
-use nbs_fractal::layout::{Layout, LayoutExt};
-use nbs_fractal::schematic::Metadata;
-use rustmatica::Litematic;
+use litematica::model::document::Document;
+use litematica::task::decompress::gzip_with_limit;
+use nbs_fractal::layout::{Layout, LayoutExt, Metadata};
+use nbs_fractal::{BlockPos, BlockState};
 
 const NAME: &str = "Note Block Track Schematic";
 
@@ -48,7 +47,7 @@ impl Layout<()> for Sample {
     }
 }
 
-/// The metadata both paths are given.
+/// The metadata the writer is given.
 fn metadata() -> Metadata<'static> {
     Metadata {
         name: NAME,
@@ -57,34 +56,35 @@ fn metadata() -> Metadata<'static> {
     }
 }
 
-/// The bytes the old in-memory path produces.
-#[allow(deprecated)]
-fn reference(layout: &Sample) -> Vec<u8> {
-    layout.as_rustmatica(metadata()).to_bytes().unwrap()
-}
-
-/// The bytes the streaming writer produces.
+/// The bytes the adapted writer produces.
 fn written(layout: &Sample) -> Vec<u8> {
     let mut bytes = Vec::new();
     layout.as_litematic(metadata(), &mut bytes).unwrap();
     bytes
 }
 
-/// Every cell's block, read back through rustmatica, in writing order.
-///
-/// The palette order is the writer's to choose, so the two projections are held
-/// equal on the blocks they paint rather than on their bytes.
-fn cells(bytes: &[u8]) -> Vec<mcdata::GenericBlockState> {
-    let litematic: Litematic<mcdata::GenericBlockState> = Litematic::from_bytes(bytes).unwrap();
-    let region = &litematic.regions[0];
-    let size = region.size;
+/// Every cell's block, read back through `litematica`, in writing order.
+fn cells(bytes: &[u8]) -> Vec<BlockState> {
+    let nbt = gzip_with_limit(bytes, 1 << 20).unwrap();
+    let document = Document::parse(&nbt).unwrap();
+    let region = &document.regions[0];
+    let size = region.size();
     iproduct!(0..size.y, 0..size.z, 0..size.x)
-        .map(|(y, z, x)| region.get_block(BlockPos::new(x, y, z)).clone())
+        .map(|(y, z, x)| {
+            let pos = BlockPos::new(x as i32, y as i32, z as i32);
+            region
+                .state_at(pos)
+                .cloned()
+                .expect("position is in bounds")
+        })
         .collect()
 }
 
 #[test]
-fn matches_reference() {
+fn round_trips_through_litematica() {
     let layout = Sample;
-    assert_eq!(cells(&written(&layout)), cells(&reference(&layout)));
+    let expected: Vec<BlockState> = iproduct!(0..SIZE.y, 0..SIZE.z, 0..SIZE.x)
+        .map(|(y, z, x)| layout.get_block_or_air(BlockPos::new(x, y, z)))
+        .collect();
+    assert_eq!(cells(&written(&layout)), expected);
 }

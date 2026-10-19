@@ -1,6 +1,6 @@
 [package]
 name = "nbs-fractal"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["kemiamu <kemya@tuta.io>"]
 edition = "2024"
 repository = "https://github.com/omninbs/nbs-fractal"
@@ -14,13 +14,11 @@ categories = ["games"]
 rsnbs = "0.1.7"
 clap = { version = "4.6.1", features = ["derive"] }
 counter = "0.7.1"
-flate2 = "1.1.10"
 itertools = "0.15.0"
-mcdata = "0.4.0"
-rustmatica = "0.5.2"
+litematica = "0.2.0"
 
 [dev-dependencies]
-ordered-float = "5.3.0"
+# meow
 
 [[bin]]
 name = "nbs-fractal"

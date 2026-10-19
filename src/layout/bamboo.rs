@@ -8,8 +8,7 @@
 
 use super::blocks::{Facing, WireConn, chain_block, inst_block, note_block, repeater, wire_state};
 use super::{Layout, air};
-use crate::{BlockState, RedStoneTick};
-use mcdata::util::BlockPos;
+use crate::{BlockPos, BlockState, RedStoneTick};
 use rsnbs::note::Tone;
 use std::collections::HashSet;
 use std::iter::{self, Peekable};
@@ -34,6 +33,7 @@ pub struct Events<I: Iterator> {
 }
 
 impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Events<I> {
+    /// Reads the groups from `notes`, measuring the first wait from `last`.
     pub fn new(notes: Peekable<I>, last: RedStoneTick) -> Self {
         let mut this = Self {
             notes,
@@ -45,14 +45,18 @@ impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Events<I> {
         this
     }
 
+    /// The wait before the cached group and how many notes it holds, if any
+    /// are cached.
     pub fn pending(&self) -> Option<(RedStoneTick, usize)> {
         (!self.cache.is_empty()).then_some((self.wait, self.cache.len()))
     }
 
+    /// Whether any group is still to read.
     pub fn has_next_group(&mut self) -> bool {
         self.notes.peek().is_some()
     }
 
+    /// Spends `ticks` waits, advancing the stream past that many empty events.
     pub fn take_waits(&mut self, ticks: RedStoneTick) {
         for _ in 0..ticks {
             let event = self.next();
@@ -60,6 +64,7 @@ impl<I: Iterator<Item = (RedStoneTick, T)>, T: Into<Tone>> Events<I> {
         }
     }
 
+    /// Takes the next cached note, which must be due.
     pub fn take_note(&mut self) -> Tone {
         match self.next() {
             Some(Some(note)) => note,

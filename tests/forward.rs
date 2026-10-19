@@ -1,16 +1,15 @@
 //! `forward_layout!` is exported, so a downstream crate can define a `Layout`
 //! wrapper with it.
 
-use mcdata::util::BlockPos;
 use nbs_fractal::layout::{Layout, LayoutExt};
-use nbs_fractal::{BlockState, forward_layout};
+use nbs_fractal::{BlockPos, BlockState, forward_layout};
 
 /// A one-wide solid line, declared from outside the crate.
 struct Solid;
 
 impl Layout<()> for Solid {
     fn block_at_with(&self, pos: BlockPos, _ctx: &()) -> Option<BlockState> {
-        (0..2).contains(&pos.x).then(BlockState::air)
+        (0..2).contains(&pos.x).then_some(BlockState::AIR)
     }
 
     fn size_with(&self, _ctx: &()) -> BlockPos {

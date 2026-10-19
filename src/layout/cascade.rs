@@ -5,9 +5,9 @@
 
 use super::blocks::{Facing, ToneBlocks, WireConn, chain_block, inst_block};
 use super::blocks::{note_block, repeater, wire_state};
-use super::{EvenlyArranged, Layout, LayoutExt, Overlaid, air};
-use crate::{BlockState, forward_layout};
-use mcdata::util::BlockPos;
+use super::compose::{EvenlyArranged, Overlaid};
+use super::{Layout, LayoutExt, air};
+use crate::{BlockPos, BlockState, forward_layout};
 use rsnbs::note::{Note, Tone};
 use rsnbs::types::TimeAnchor;
 use std::collections::HashSet;

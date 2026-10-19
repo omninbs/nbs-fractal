@@ -1,5 +1,4 @@
 use counter::Counter;
-use ordered_float::OrderedFloat;
 use rsnbs::note::{Note, NoteStreamExt, Notes, Tone};
 use rsnbs::song::Song;
 use rsnbs::types::{LayerAnchor, Position, Tick, TimeAnchor};
@@ -241,7 +240,7 @@ pub fn satisfy_constraints(
                     .iter()
                     .map(|&pp| multiplicity[&pp] as f32 / multiset[&pp] as f32)
                     .sum();
-                (OrderedFloat(score), group.first().copied())
+                (score.to_bits(), group.first().copied())
             })
             .unwrap();
 
@@ -501,21 +500,23 @@ pub fn test_deconvolve() {
 
 #[test]
 fn dump_litematic() {
-    use rustmatica::Litematic;
-    let litematic: Litematic<
-        mcdata::GenericBlockState,
-        mcdata::GenericEntity,
-        mcdata::GenericBlockEntity,
-    > = Litematic::read_file("../rsnbs/fixtures/Unnamed.litematic").unwrap();
-    for (i, region) in litematic.regions.iter().enumerate() {
+    use crate::BlockPos;
+    use litematica::model::document::Document;
+    use litematica::task::decompress::gzip_with_limit;
+
+    let raw = std::fs::read("../rsnbs/fixtures/Unnamed.litematic").unwrap();
+    let nbt = gzip_with_limit(&raw, 1 << 30).unwrap();
+    let document = Document::parse(&nbt).unwrap();
+    for (i, region) in document.regions.iter().enumerate() {
         println!("=== Region {}: {} ===", i, region.name);
-        println!("Position: {:?}, Size: {:?}", region.position, region.size);
-        for y in 0..region.size.y.abs() {
+        println!("Position: {:?}, Size: {:?}", region.position, region.size());
+        let size = region.size();
+        for y in 0..size.y {
             println!("--- Layer y={} ---", y);
-            for z in 0..region.size.z.abs() {
-                for x in 0..region.size.x.abs() {
-                    let pos = mcdata::util::BlockPos::new(x, y, z);
-                    let block: &mcdata::GenericBlockState = region.get_block(pos);
+            for z in 0..size.z {
+                for x in 0..size.x {
+                    let pos = BlockPos::new(x as i32, y as i32, z as i32);
+                    let block = region.state_at(pos).expect("position is in bounds");
                     if block.name != "minecraft:air" {
                         println!("{:#?}", block);
                     }
@@ -547,7 +548,7 @@ fn test_linear_layout() {
         .collect();
     let tracks = notes.split_by_layer_gaps();
     let layout = MultiLinearLayout::new(tracks, 0, song_length);
-    let metadata = crate::schematic::Metadata {
+    let metadata = crate::layout::Metadata {
         name: "Note Block Track Schematic",
         description: "Linear from source.nbs",
         author: "rustnbs",

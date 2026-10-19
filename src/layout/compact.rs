@@ -2,9 +2,9 @@
 
 use super::bamboo::{Events, Joint, State};
 use super::blocks::{Facing, WireConn, chain_block, inst_block, note_block, repeater, wire_state};
-use super::{Clipped, EvenlyArranged, Layout, Overlaid, Provided, WithFloor, air};
-use crate::{BlockState, RedStoneTick, forward_layout};
-use mcdata::util::BlockPos;
+use super::compose::{Clipped, EvenlyArranged, Overlaid, Provided, WithFloor};
+use super::{Layout, air};
+use crate::{BlockPos, BlockState, RedStoneTick, forward_layout};
 use rsnbs::note::Tone;
 use std::collections::HashSet;
 use std::iter;

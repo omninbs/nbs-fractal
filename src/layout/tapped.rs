@@ -3,9 +3,9 @@
 use super::blocks::{Facing, ToneBlocks, WireConn, chain_block, observer};
 use super::blocks::{redstone_torch, redstone_wire, repeater, wire_state};
 use super::compact::{CompactLayout, RawCompact};
-use super::{Arranged, Axis, EdgeArranged, Layout, LayoutExt, WithFloor};
-use crate::{BlockState, RedStoneTick, analysis::BoundedTec};
-use mcdata::util::BlockPos;
+use super::compose::{Arranged, EdgeArranged, WithFloor};
+use super::{Axis, Layout, LayoutExt};
+use crate::{BlockPos, BlockState, RedStoneTick, analysis::BoundedTec};
 use rsnbs::note::{Instrument, Key, Tone};
 use rsnbs::types::Tick;
 use std::collections::HashSet;

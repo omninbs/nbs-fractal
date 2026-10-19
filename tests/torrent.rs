@@ -1,6 +1,6 @@
 //! Placement of panning and volume in the Torrent layout.
 
-use mcdata::util::BlockPos;
+use nbs_fractal::BlockPos;
 use nbs_fractal::layout::{LayoutExt, torrent::TorrentLayout};
 use rsnbs::note::{Instrument, Key, Note, Tone};
 use rsnbs::types::{Panning, Volume};
@@ -126,7 +126,7 @@ fn sweep_all_panning_and_volume() {
     let layout = TorrentLayout::new(notes, TorrentLayout::DEFAULT_TRACKS, false);
     assert_eq!(placed(&layout).len(), TICKS * voices.len());
 
-    let metadata = nbs_fractal::schematic::Metadata {
+    let metadata = nbs_fractal::layout::Metadata {
         name: "Note Block Track Schematic",
         description: "Torrent pan/volume audition",
         author: "nbs-fractal",

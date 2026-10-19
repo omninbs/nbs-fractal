@@ -1,9 +1,9 @@
 //! Fishbone layout for NBS song projection.
 
 use super::blocks::{Facing, WireConn, chain_block, inst_block, note_block, repeater, wire_state};
-use super::{EvenlyArranged, Layout, air};
-use crate::{BlockState, forward_layout};
-use mcdata::util::BlockPos;
+use super::compose::EvenlyArranged;
+use super::{Layout, air};
+use crate::{BlockPos, BlockState, forward_layout};
 use rsnbs::note::Tone;
 use rsnbs::types::{Tick, TimeAnchor};
 use std::collections::HashSet;
