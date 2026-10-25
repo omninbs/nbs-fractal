@@ -7,14 +7,12 @@
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
-pub mod analysis;
-pub mod layout;
-
 #[cfg(test)]
 mod tests;
-
 use rsnbs::note::{Instrument, Tone};
 
+pub mod analysis;
+pub mod layout;
 pub use litematica::knowledge::mc::{BlockPos, BlockState};
 
 /// Redstone tick (10 t/s).

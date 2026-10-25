@@ -1,13 +1,17 @@
 # nbs-fractal
 
-![Crates.io Version](https://img.shields.io/crates/v/nbs-fractal?style=flat-square)
-![Crates.io Dependents](https://img.shields.io/crates/dependents/nbs-fractal?style=flat-square)
-![GitHub last commit](https://img.shields.io/github/last-commit/omninbs/nbs-fractal?style=flat-square)
-![GitHub Repo stars](https://img.shields.io/github/stars/omninbs/nbs-fractal?style=flat-square)
+[![Crates.io Version](https://img.shields.io/crates/v/nbs-fractal?style=flat-square&logo=rust&labelColor=363a4f&color=f5a97f)](https://crates.io/crates/nbs-fractal)
+[![Crates.io Dependents](https://img.shields.io/crates/dependents/nbs-fractal?style=flat-square&logo=rust&labelColor=363a4f&color=ee99a0)](https://crates.io/crates/nbs-fractal/reverse_dependencies)
+[![GitHub last commit](https://img.shields.io/github/last-commit/omninbs/nbs-fractal?style=flat-square&logo=github&labelColor=363a4f&color=f5bde6)](https://github.com/omninbs/nbs-fractal/activity)
+[![GitHub Repo stars](https://img.shields.io/github/stars/omninbs/nbs-fractal?style=flat-square&logo=github&labelColor=363a4f&color=c6a0f6)](https://github.com/omninbs/nbs-fractal)
 
 It is a concrete implementation of the "_formal reduction of redstone music_", pioneeringly validating the feasibility of its formal logic and layout structures.
 
-> This crate is in early development with a frequently changing API. Please pin your dependency to a specific version.
+
+```bash
+# run the following cargo command in your project directory:
+cargo install nbs-fractal --version ">=0.1.2, <0.2.0"
+```
 
 ## Scope of this work
 
