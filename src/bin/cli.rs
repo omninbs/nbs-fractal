@@ -3,11 +3,10 @@ use itertools::Either;
 use nbs_fractal::analysis::reuse::{plan_to_tecs, reuse_flow};
 use nbs_fractal::analysis::{BoundedTec, TePlane, TransEqClass};
 use nbs_fractal::layout::Metadata;
+use nbs_fractal::layout::compact::MultiCompactLayout;
 use nbs_fractal::layout::compose::WithFloor;
 use nbs_fractal::layout::linear::{MultiLinearLayout, StackedLinearLayout};
 use nbs_fractal::layout::{LayoutExt, torrent::TorrentLayout};
-#[allow(deprecated)]
-use nbs_fractal::layout::{cascade::CascadeLayout, compact::MultiCompactLayout};
 use nbs_fractal::layout::{fishbone::MultiFishboneLayout, tapped::TappedLayout};
 use rsnbs::note::{Note, NoteStreamExt, Notes, Tone};
 use rsnbs::song::{Layer, Song};
@@ -27,7 +26,6 @@ enum Cli {
     Compact(Compact),
     Linear(Linear),
     Fishbone(Fishbone),
-    Cascade(Cascade),
     Torrent(Torrent),
     Decompose(Decompose),
     Match(Match),
@@ -39,7 +37,6 @@ fn main() {
         Cli::Compact(cmd) => cmd.run(),
         Cli::Linear(cmd) => cmd.run(),
         Cli::Fishbone(cmd) => cmd.run(),
-        Cli::Cascade(cmd) => cmd.run(),
         Cli::Torrent(cmd) => cmd.run(),
         Cli::Decompose(cmd) => cmd.run(),
         Cli::Match(cmd) => cmd.run(),
@@ -225,39 +222,6 @@ impl Fishbone {
         };
         let layout = MultiFishboneLayout::new(tracks, self.gap, song_length);
         let description = format!("Fishbone from {}", self.input);
-        write_schematic(layout, self.floor, description, &self.output);
-    }
-}
-
-// Cascade
-//
-// ++++++++++++============++++++++++++============++++++++++++============
-
-/// Layout (Cascade): Multi-track timeline with pan and volume.
-///
-/// Deprecated in favour of the torrent layout.
-///
-/// Multiple tracks run in parallel, played evenly along time. The design can
-/// reproduce volume and panning.
-#[derive(clap::Args)]
-struct Cascade {
-    /// Path to input NBS file
-    input: String,
-    /// Path to output litematic file
-    #[arg(default_value = "out/generated_cascade.litematic")]
-    output: String,
-    /// Floor platform mode
-    #[arg(short = 'F', long, value_enum, default_value_t)]
-    floor: Floor,
-}
-
-impl Cascade {
-    #[allow(deprecated)]
-    fn run(self) {
-        let song = open_song(&self.input);
-        let notes = song.resolved_notes();
-        let layout = CascadeLayout::new(notes);
-        let description = format!("Cascade from {}", self.input);
         write_schematic(layout, self.floor, description, &self.output);
     }
 }
