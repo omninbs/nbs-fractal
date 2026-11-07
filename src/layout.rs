@@ -4,6 +4,7 @@ pub mod bamboo;
 pub mod blocks;
 pub mod compact;
 pub mod compose;
+pub mod copper;
 pub mod fishbone;
 pub mod linear;
 pub mod tapped;
