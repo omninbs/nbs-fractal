@@ -1,7 +1,8 @@
 //! TODO: describe the copper layout.
 
 use super::Layout;
-use super::blocks::{Facing, WireConn, redstone_torch, repeater, wire_state};
+use super::bamboo::Joint;
+use super::blocks::{Facing, WireConn, chain_block, redstone_torch, repeater, wire_state};
 use crate::{BlockPos, BlockState, RedStoneTick};
 use rsnbs::note::Tone;
 use rsnbs::types::TimeAnchor;
@@ -96,10 +97,10 @@ impl Controller {
             _ => false,
         };
         match (local, inverted) {
-            (0, _) => Some(bulb(lit)),                             // bulb
-            (1, true) | (2, false) => Some(comparator(lit)),       // signal
-            (3, true) => Some(redstone_torch(Some("east"), !lit)), // inverter
-            _ => Some(cut_copper()),                               // blocks
+            (0, _) => Some(bulb(lit)),                                     // bulb
+            (1, true) | (2, false) => Some(comparator(Facing::West, lit)), // signal
+            (3, true) => Some(redstone_torch(Some("east"), !lit)),         // inverter
+            _ => Some(cut_copper()),                                       // blocks
         }
     }
 
@@ -163,6 +164,109 @@ impl<Ctx> Layout<Ctx> for Controller {
     }
 }
 
+// Template: TrackHead
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+/// The head of a 1clk track, tapping the raw clock through a repeater.
+pub struct ClkHead {
+    /// The first cell: its notes, a repeater holding them back, or nothing.
+    start: Option<Joint>,
+}
+
+impl ClkHead {
+    /// Builds a head carrying `start`.
+    pub fn new(start: Option<Joint>) -> Self {
+        Self { start }
+    }
+}
+
+impl Layout<()> for ClkHead {
+    fn block_at_with(&self, pos: BlockPos, _ctx: &()) -> Option<BlockState> {
+        match (pos.z, pos.y, pos.x) {
+            (0, 0, 1) => Some(chain_block()),
+            // A held note lengthens the tap instead of playing.
+            (0, 1, 1) => {
+                let tick = self.start.as_ref().map_or(0, Joint::stem).max(1);
+                Some(repeater(tick.to_string(), Facing::South, false, false))
+            }
+            _ => self.start.as_ref()?.block_at_with(pos, &true),
+        }
+    }
+
+    fn size_with(&self, _ctx: &()) -> BlockPos {
+        BlockPos::new(3, 2, 2)
+    }
+}
+
+/// The head of a 2clk or 4clk track, tapping a bulb's output through a
+/// comparator.
+pub struct BulbHead {
+    /// The first cell: its notes, a repeater holding them back, or nothing.
+    start: Option<Joint>,
+}
+
+impl BulbHead {
+    /// Builds a head carrying `start`.
+    pub fn new(start: Option<Joint>) -> Self {
+        Self { start }
+    }
+}
+
+impl Layout<()> for BulbHead {
+    fn block_at_with(&self, pos: BlockPos, _ctx: &()) -> Option<BlockState> {
+        match (pos.z, pos.y, pos.x) {
+            (0, 0, 1) => Some(chain_block()),
+            (0, 1, 1) => Some(comparator(Facing::North, false)),
+            _ => self.start.as_ref()?.block_at_with(pos, &true),
+        }
+    }
+
+    fn size_with(&self, _ctx: &()) -> BlockPos {
+        BlockPos::new(3, 2, 2)
+    }
+}
+
+/// The joined head of the two 8clk tracks, tapping two bulbs and inverting one
+/// into the other.
+pub struct SynthHead {
+    /// The two halves' first cells, west to east.
+    halves: [Joint; 2],
+}
+
+impl SynthHead {
+    /// Builds a head from the two halves' first cells.
+    pub fn new(halves: [Joint; 2]) -> Self {
+        Self { halves }
+    }
+}
+
+impl Layout<()> for SynthHead {
+    fn block_at_with(&self, pos: BlockPos, _ctx: &()) -> Option<BlockState> {
+        use WireConn::{Idle, Side};
+
+        let inverter = |y: i32| match (y, pos.x) {
+            (0, _) => Some(chain_block()),
+            // Points east.
+            (1, 2) => Some(repeater("1", Facing::West, false, false)),
+            (1, 3) => Some(wire_state(Side, Side, Idle, Idle, "0")),
+            (1, 4) => Some(redstone_torch(Some("west"), true)),
+            _ => None,
+        };
+        let local = BlockPos::new(pos.x % 4, pos.y, pos.z);
+        match (pos.z, pos.y, pos.x) {
+            (0, 0, 1 | 5) => Some(chain_block()),
+            (0, 1, 1 | 5) => Some(comparator(Facing::North, false)),
+            (1, _, 2..=4) => inverter(pos.y),
+            _ => self.halves[(pos.x > 3) as usize].block_at_with(local, &true),
+        }
+    }
+
+    fn size_with(&self, _ctx: &()) -> BlockPos {
+        BlockPos::new(7, 2, 2)
+    }
+}
+
 // Blocks
 //
 // ++++++++++++============++++++++++++============++++++++++++============
@@ -186,12 +290,12 @@ fn bulb(lit: bool) -> BlockState {
     }
 }
 
-/// A comparator pointing west, powered as given.
-fn comparator(powered: bool) -> BlockState {
+/// A comparator toward `facing`, powered as given.
+fn comparator(facing: Facing, powered: bool) -> BlockState {
     BlockState {
         name: "minecraft:comparator".into(),
         properties: From::from([
-            ("facing".into(), "west".into()),
+            ("facing".into(), facing.name().into()),
             ("mode".into(), "compare".into()),
             ("powered".into(), powered.to_string().into()),
         ]),
