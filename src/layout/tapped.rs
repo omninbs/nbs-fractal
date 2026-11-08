@@ -1,7 +1,7 @@
 //! Tapped delay line layout for NBS song projection.
 
 use super::blocks::{Facing, ToneBlocks, WireConn, chain_block, observer};
-use super::blocks::{redstone_torch, redstone_wire, repeater, wire_state};
+use super::blocks::{redstone_torch, repeater, wire_state};
 use super::compact::{CompactLayout, RawCompact};
 use super::compose::{Arranged, EdgeArranged, WithFloor};
 use super::{Axis, Layout, LayoutExt};
@@ -280,7 +280,7 @@ impl<Ctx> Layout<Ctx> for Tap {
             (2.., 2.., 1, 2) => Some(repeater("4", Facing::East, false, false)),
             (2, 1, 1, 2) => Some(repeater(decay(6), Facing::East, false, false)),
             (3.., 1, 1, 2) => Some(repeater(cycle(3, 8), Facing::East, false, false)),
-            (2, 1, 0, 2) if delay < 11 => Some(redstone_wire()),
+            (2, 1, 0, 2) if delay < 11 => Some(wire_state(Side, Side, Idle, Idle, "15")),
             (2, 1, 0, 2) => Some(repeater(decay(10), Facing::East, false, false)),
             (2, 2.., 0, 2) if phase() < 4 => Some(wire_state(Side, Side, Idle, Idle, "15")),
             (2, 2.., 0, 2) => Some(repeater(cycle(3, 8), Facing::West, true, false)),
@@ -316,7 +316,6 @@ impl<Ctx> Layout<Ctx> for Tap {
             repeater(decay(10), East, false, false),
             repeater(cycle(3, 8), East, false, false),
             repeater(cycle(3, 8), West, true, false),
-            redstone_wire(),
             wire_state(Idle, Idle, Side, Side, "0"),
             wire_state(Side, Side, Idle, Idle, "15"),
         ])
