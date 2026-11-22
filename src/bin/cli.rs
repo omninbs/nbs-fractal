@@ -466,7 +466,7 @@ struct Tapped {
     #[arg(default_value = "out/generated_tapped.litematic")]
     output: String,
     /// Max columns per row before wrapping (0 = no wrap)
-    #[arg(short, long, default_value_t = 16)]
+    #[arg(short, long, default_value_t = 18)]
     wrap: usize,
     /// Block spacing between adjacent tracks (0 = interlocked)
     #[arg(short, long, default_value_t = 0)]
