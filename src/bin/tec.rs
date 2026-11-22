@@ -58,6 +58,9 @@ struct Scan {
     /// Smallest scatter gap, in redstone ticks
     #[arg(long = "min-gap", default_value_t = DEFAULT_MIN_GAP)]
     min_gap: Tick,
+    /// Largest single tap delay, in redstone ticks (0 = unbounded)
+    #[arg(long = "max-gap", default_value_t = 0)]
+    max_gap: Tick,
 }
 
 impl Scan {
@@ -77,7 +80,14 @@ impl Scan {
             let Ok(budget) = budget.trim().parse::<usize>() else {
                 continue;
             };
-            let (gain, plan) = plan_layers(&plane, &pool, budget, self.max_arity, self.min_gap);
+            let (gain, plan) = plan_layers(
+                &plane,
+                &pool,
+                budget,
+                self.max_arity,
+                self.min_gap,
+                self.max_gap,
+            );
             let first = plan.first().map(|tec| tec.offsets().nth(1).unwrap_or(0));
             println!(
                 "layers={budget} reuse={gain} d_rs={}",
@@ -153,12 +163,13 @@ fn plan_layers(
     budget: usize,
     max_arity: usize,
     min_gap: Tick,
+    max_gap: Tick,
 ) -> (usize, Vec<TransEqClass<Tone>>) {
     let mut work = plane.clone();
     let mut plan = Vec::new();
     let mut gain = 0;
     while plan.len() < budget {
-        let Some((reuse, scatter)) = grow(&work, pool, max_arity, min_gap) else {
+        let Some((reuse, scatter)) = grow(&work, pool, max_arity, min_gap, max_gap) else {
             break;
         };
         let offsets = to_nonzero(&scatter);
@@ -177,6 +188,7 @@ fn grow(
     pool: &[Tick],
     max_arity: usize,
     min_gap: Tick,
+    max_gap: Tick,
 ) -> Option<(usize, BTreeSet<Tick>)> {
     const WIDTH: usize = 16;
     let mut beam = vec![(BTreeSet::new(), 0)];
@@ -207,13 +219,18 @@ fn grow(
         beam = next;
     }
     seen.into_iter()
-        .filter_map(|set| realized_reuse(plane, &set, min_gap).map(|reuse| (reuse, set)))
+        .filter_map(|set| realized_reuse(plane, &set, min_gap, max_gap).map(|r| (r, set)))
         .max_by_key(|(reuse, _)| *reuse)
 }
 
 /// Extracts `scatter` from a copy of `plane` and scores the scatter `restore`
 /// ends up with, dropping candidates with too small a gap.
-fn realized_reuse(plane: &TePlane<Tone>, scatter: &BTreeSet<Tick>, min_gap: Tick) -> Option<usize> {
+fn realized_reuse(
+    plane: &TePlane<Tone>,
+    scatter: &BTreeSet<Tick>,
+    min_gap: Tick,
+    max_gap: Tick,
+) -> Option<usize> {
     let mut work = plane.clone();
     let tec = BoundedTec::extract_from(&mut work, to_nonzero(scatter)).into_inner();
     if tec.reuse() == 0 {
@@ -221,7 +238,10 @@ fn realized_reuse(plane: &TePlane<Tone>, scatter: &BTreeSet<Tick>, min_gap: Tick
     }
     let realized = BoundedTec::restore(&tec.expand()).into_inner();
     let gap = realized.min_gap()?;
-    (gap >= min_gap).then(|| realized.reuse())
+    let taps: Vec<Tick> = realized.offsets().collect();
+    let tap_gap = taps.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
+    let bounded = max_gap == 0 || tap_gap <= max_gap;
+    (gap >= min_gap && bounded).then(|| realized.reuse())
 }
 
 /// The offsets worth trying, strongest autocorrelations first, plus their
