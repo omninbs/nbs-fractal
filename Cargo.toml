@@ -23,3 +23,7 @@ litematica = ">=0.2.0, <0.3.0"
 [[bin]]
 name = "nbs-fractal"
 path = "src/bin/cli.rs"
+
+[[bin]]
+name = "nbs-fractal-tec"
+path = "src/bin/tec.rs"
