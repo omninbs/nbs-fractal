@@ -307,37 +307,73 @@ impl Tap {
         let east = (delay.get() as i32 - 6) / 8 + 4;
         Self { delay, out, east }
     }
+
+    /// The delay chain west of the bus column, drawn for `local_pos` and `delay`.
+    ///
+    /// `delay` is what the chain itself carries: the segment's delay already short
+    /// of both bus cells, so every offset below counts chain rt only.
+    fn chain(&self, local_pos: BlockPos, delay: RedStoneTick) -> Option<BlockState> {
+        use WireConn::*;
+        let back = self.east - local_pos.x;
+
+        match (back, local_pos.x, local_pos.z, local_pos.y) {
+            (_, _, _, 1) | (_, 0, 0, 2) | (2, _, 1, 2) => Some(chain_block()),
+            (_, 0, 1, 2) => Some(redstone_torch(Some("south"), false)),
+            (2, _, 0, 2) => Some(redstone_torch(Some("south"), true)),
+            (4.., 2.., 0, 2) => Some(repeater("4", Facing::West, true, false)),
+            (3.., 2.., 1, 2) => Some(repeater("4", Facing::East, false, false)),
+            (3, 1, 1, 2) => Some(repeater(
+                delay.saturating_sub(2).min(4).to_string(),
+                Facing::East,
+                false,
+                false,
+            )),
+            (4.., 1, 1, 2) => Some(repeater(
+                ((delay + 7) % 8).min(4).to_string(),
+                Facing::East,
+                false,
+                false,
+            )),
+            (3, 1, 0, 2) if delay < 7 => Some(wire_state(Side, Side, Idle, Idle, "15")),
+            (3, 1, 0, 2) => Some(repeater(
+                delay.saturating_sub(6).min(4).to_string(),
+                Facing::East,
+                false,
+                false,
+            )),
+            (3, 2.., 0, 2) if (delay + 7) % 8 < 4 => Some(wire_state(Side, Side, Idle, Idle, "15")),
+            (3, 2.., 0, 2) => Some(repeater(
+                ((delay + 7) % 8).min(4).to_string(),
+                Facing::West,
+                true,
+                false,
+            )),
+            (4.., 1, 0, 2) => Some(repeater("3", Facing::West, true, false)),
+            _ => Option::None,
+        }
+    }
 }
 
 impl<Ctx> Layout<Ctx> for Tap {
-    /// The delay line of one segment: its chain, closed by the bus cell it ends
-    /// on, which either takes the pulse off the bus (`out`) or only relays it.
+    /// The delay line of one segment: the bus column it ends on, then the chain
+    /// west of it.
     fn block_at_with(&self, pos: BlockPos, _ctx: &Ctx) -> Option<BlockState> {
-        use WireConn::*;
-        let back = self.east - pos.x - 1;
+        use WireConn::{Idle, Side};
+        let back = self.east - pos.x;
         let delay = self.delay.get();
-        let clamp = |tick: Tick| tick.min(4).to_string();
-        let cycle = |off: Tick, modu: Tick| clamp((delay + off) % modu);
-        let decay = |sub: Tick| clamp(delay.saturating_sub(sub));
-        let phase = || (delay + 3) % 8;
+        let tap = delay.saturating_sub(3).min(4);
+        let bus = match self.out {
+            true => tap,
+            false => tap + SEAM,
+        };
 
-        match (back, pos.x, pos.z, pos.y) {
-            (_, _, _, 1) | (_, 0, 0, 2) | (1, _, 1, 2) => Some(chain_block()),
-            (_, 0, 1, 2) => Some(redstone_torch(Some("south"), false)),
-            (1, _, 0, 2) => Some(redstone_torch(Some("south"), true)),
-            (3.., 2.., 0, 2) => Some(repeater("4", Facing::West, true, false)),
-            (2.., 2.., 1, 2) => Some(repeater("4", Facing::East, false, false)),
-            (2, 1, 1, 2) => Some(repeater(decay(6), Facing::East, false, false)),
-            (3.., 1, 1, 2) => Some(repeater(cycle(3, 8), Facing::East, false, false)),
-            (2, 1, 0, 2) if delay < 11 => Some(wire_state(Side, Side, Idle, Idle, "15")),
-            (2, 1, 0, 2) => Some(repeater(decay(10), Facing::East, false, false)),
-            (2, 2.., 0, 2) if phase() < 4 => Some(wire_state(Side, Side, Idle, Idle, "15")),
-            (2, 2.., 0, 2) => Some(repeater(cycle(3, 8), Facing::West, true, false)),
-            (3.., 1, 0, 2) => Some(repeater("3", Facing::West, true, false)),
-            (0, _, 1, 2) if self.out => Some(wire_state(Idle, Idle, Side, Side, "0")),
-            (0, _, 1, 2) => Some(repeater("4", Facing::North, false, false)),
-            (0, _, 0, 2) => Some(repeater(decay(3), Facing::North, false, false)),
-            _ => Option::None,
+        match (back, pos.z, pos.y) {
+            (1, 1, 2) if self.out => Some(wire_state(Idle, Idle, Side, Side, "0")),
+            (1, 1, 2) => Some(repeater(SEAM.to_string(), Facing::North, false, false)),
+            (1, 0, 2) => Some(repeater(tap.to_string(), Facing::North, false, false)),
+            (1, _, 1) => Some(chain_block()),
+            (1, _, _) => Option::None,
+            _ => self.chain(pos, delay.saturating_sub(bus)),
         }
     }
 
