@@ -14,7 +14,7 @@ TE=./target/release/nbs-fractal-tec
 cp SONG.nbs out/NAME.nbs
 $TE scan out/NAME.nbs --layers 2 --max-gap 102
 $NB match out/NAME.nbs out/NAME_3l.tec.nbs -r A -r B
-$NB tapped out/NAME_3l.tec.nbs out/tapped_3l.litematic -w 18
+$NB tapped out/NAME_3l.tec.nbs out/tapped_3l.litematic -w 18 --max-tap 350
 $TE verify out/NAME_3l.tec.nbs
 ```
 
@@ -45,6 +45,11 @@ width = (delay - 6) / 8 + 4   // integer division
 
 Width 16 peaks at delay 109 rt; `--max-gap 102` is the rounded cap used here.
 Without a cap a scatter took 688 rt on this song, 89 blocks wide.
+
+`tapped --max-tap <rt>` bounds one tap: a longer gap rides several taps in a
+row, narrower and deeper, timing unchanged. Bound at least 8; 0 = unbounded.
+With it, `scan --max-gap` can be raised or left at 0. An added tap costs a row
+pair plus two torches; pick the bound that lowers the volume.
 
 Gaps are rt, rules are raw ticks. At tempo 18 two raw ticks make one rt, so
 `-r 128` is 64 rt.

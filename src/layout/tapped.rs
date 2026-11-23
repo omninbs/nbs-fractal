@@ -31,10 +31,13 @@ impl TappedLayout {
     /// kernel drives the playing unit. With `balanced`, the playing lines stretch
     /// their row intervals so they fit within the longest line's span, flooring
     /// the interval to whole blocks; otherwise every line keeps the base pitch.
+    /// `max_tap` bounds one tap's delay; a larger gap is carried by several taps
+    /// in a row, so no single tap grows past the bound.
     pub fn new<I: IntoIterator<Item = BoundedTec<Tone>>>(
         tecs: I,
         wrap_length: Option<NonZero<usize>>,
         gap: u32,
+        max_tap: Option<MaxTap>,
         full: bool,
         balanced: bool,
     ) -> Self {
@@ -57,7 +60,7 @@ impl TappedLayout {
 
             // the bottom line carries the switch
             let switch = lyr + 1 == count;
-            tap_lines.push(TapLine::new(tec.scatter, repeater_coarse, switch));
+            tap_lines.push(TapLine::new(tec.scatter, repeater_coarse, switch, max_tap));
             raws.push(raw);
         }
 
@@ -141,17 +144,30 @@ pub struct TapLine {
 
 impl TapLine {
     /// Builds a TEC's tapped delay line from its ascending offsets, each tap
-    /// driven by the gap to the previous offset; `switch` adds the closing tap.
+    /// driven by the gap to the previous offset; `switch` adds the closing tap,
+    /// and `max_tap` bounds one tap's delay by spreading a wider gap over a row
+    /// of taps whose last one exposes the pulse.
     pub fn new<I: IntoIterator<Item = NonZero<RedStoneTick>>>(
         ticks: I,
         repeater_coarse: Option<NonZero<RedStoneTick>>,
         switch: bool,
+        max_tap: Option<MaxTap>,
     ) -> Self {
-        let taps = ticks.into_iter().scan(0, |prev, tick| {
-            let diff = tick.get() - *prev;
-            *prev = tick.get();
-            Some(Tap::new(NonZero::new(diff).unwrap(), repeater_coarse))
-        });
+        let mut taps = Vec::new();
+        let mut prev = 0;
+        for tick in ticks {
+            let mut parts = split_gap(tick.get() - prev, max_tap);
+            prev = tick.get();
+            let head = parts.pop().expect("a gap is positive");
+            for part in parts {
+                taps.push(Tap::new(part, repeater_coarse, false));
+            }
+            taps.push(Tap::new(head, repeater_coarse, true));
+        }
+        debug_assert_eq!(
+            taps.iter().map(|tap| tap.delay.get()).sum::<RedStoneTick>(),
+            prev
+        );
         let delays = EdgeArranged::new(taps, Axis::Southing, 0, Axis::Easting.unit(), &());
         let inner = delays.size();
         let width = inner.x.max(if switch { 5 } else { 2 });
@@ -230,6 +246,29 @@ impl<Ctx> Layout<Ctx> for TapLine {
     }
 }
 
+// Split
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+/// The d4 repeater a relay puts on the bus, in redstone ticks.
+const SEAM: RedStoneTick = 4;
+
+/// The delays one gap's segments carry, none above `max`.
+///
+/// A gap within `max` stays a single segment. A longer one is spread over
+/// `ceil(gap / max)` segments of near-equal delay, so the widest shrinks with the
+/// count while the group still carries exactly `gap`.
+fn split_gap(gap: RedStoneTick, max: Option<MaxTap>) -> Vec<NonZero<RedStoneTick>> {
+    let max = max.map_or(gap, MaxTap::get).max(1);
+    let count = gap.div_ceil(max);
+    let base = gap / count;
+    let rest = gap % count;
+    (0..count)
+        .map(|index| if index < rest { base + 1 } else { base })
+        .map(|part| NonZero::new(part).expect("a split segment is positive"))
+        .collect()
+}
+
 /// The switch's source button: a bass-drum note block.
 fn switch_button() -> BlockState {
     let tone = Tone::new(Instrument::BassDrum, Key::from_minecraft_note(0).unwrap());
@@ -240,39 +279,49 @@ fn switch_button() -> BlockState {
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-/// A single delay element in the tapped delay line.
+/// One segment of the tapped delay line: a chain of repeaters, closed by the bus
+/// cell it ends on.
 struct Tap {
+    /// The delay this segment carries, its bus seam included.
     delay: NonZero<RedStoneTick>,
-    size: BlockPos,
+    /// Whether the segment exposes its pulse, instead of relaying the bus onward.
+    out: bool,
+    /// The columns the chain spans: one per 8 ticks, plus the fixed head.
+    east: i32,
 }
 
 impl Tap {
     const ELEVATION: i32 = 4;
     const SOUTHING: i32 = 2;
 
-    fn new(delay: NonZero<RedStoneTick>, repeater_coarse: Option<NonZero<RedStoneTick>>) -> Self {
+    fn new(
+        delay: NonZero<RedStoneTick>,
+        repeater_coarse: Option<NonZero<RedStoneTick>>,
+        out: bool,
+    ) -> Self {
         assert!(
             repeater_coarse.is_none_or(|c| c.get() >= 4),
             "coarse < 4 is not supported, adjust the step"
         );
 
-        let width = (delay.get() as i32 - 6) / 8 + 4;
-        let size = BlockPos::new(width, Self::ELEVATION, Self::SOUTHING);
-        Self { delay, size }
+        let east = (delay.get() as i32 - 6) / 8 + 4;
+        Self { delay, out, east }
     }
 }
 
 impl<Ctx> Layout<Ctx> for Tap {
+    /// The delay line of one segment: its chain, closed by the bus cell it ends
+    /// on, which either takes the pulse off the bus (`out`) or only relays it.
     fn block_at_with(&self, pos: BlockPos, _ctx: &Ctx) -> Option<BlockState> {
         use WireConn::*;
-        let rev_easting = self.size.x - pos.x - 1;
+        let back = self.east - pos.x - 1;
         let delay = self.delay.get();
         let clamp = |tick: Tick| tick.min(4).to_string();
         let cycle = |off: Tick, modu: Tick| clamp((delay + off) % modu);
         let decay = |sub: Tick| clamp(delay.saturating_sub(sub));
         let phase = || (delay + 3) % 8;
 
-        match (rev_easting, pos.x, pos.z, pos.y) {
+        match (back, pos.x, pos.z, pos.y) {
             (_, _, _, 1) | (_, 0, 0, 2) | (1, _, 1, 2) => Some(chain_block()),
             (_, 0, 1, 2) => Some(redstone_torch(Some("south"), false)),
             (1, _, 0, 2) => Some(redstone_torch(Some("south"), true)),
@@ -285,14 +334,15 @@ impl<Ctx> Layout<Ctx> for Tap {
             (2, 2.., 0, 2) if phase() < 4 => Some(wire_state(Side, Side, Idle, Idle, "15")),
             (2, 2.., 0, 2) => Some(repeater(cycle(3, 8), Facing::West, true, false)),
             (3.., 1, 0, 2) => Some(repeater("3", Facing::West, true, false)),
-            (0, _, 1, 2) => Some(wire_state(Idle, Idle, Side, Side, "0")),
+            (0, _, 1, 2) if self.out => Some(wire_state(Idle, Idle, Side, Side, "0")),
+            (0, _, 1, 2) => Some(repeater("4", Facing::North, false, false)),
             (0, _, 0, 2) => Some(repeater(decay(3), Facing::North, false, false)),
             _ => Option::None,
         }
     }
 
     fn size_with(&self, _ctx: &Ctx) -> BlockPos {
-        self.size
+        BlockPos::new(self.east, Self::ELEVATION, Self::SOUTHING)
     }
 
     /// The blocks a delay element can draw: its chain, torches, repeaters and the
@@ -319,5 +369,35 @@ impl<Ctx> Layout<Ctx> for Tap {
             wire_state(Idle, Idle, Side, Side, "0"),
             wire_state(Side, Side, Idle, Idle, "15"),
         ])
+    }
+}
+
+// MaxTap
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+/// Upper bound on one segment's delay, in redstone ticks.
+///
+/// A bound under [`MaxTap::MIN`] cannot be split into segments that each outlast
+/// a bus seam, so the constructor reads it as no bound, just as [`NonZero::new`]
+/// reads zero.
+#[derive(Clone, Copy)]
+pub struct MaxTap(NonZero<RedStoneTick>);
+
+impl MaxTap {
+    /// Smallest realizable bound: an even split of it still leaves every relay a
+    /// seam and a tick.
+    pub const MIN: RedStoneTick = 8;
+
+    /// The bound, or `None` when `ticks` cannot carry a split.
+    pub fn new(ticks: RedStoneTick) -> Option<Self> {
+        NonZero::new(ticks)
+            .filter(|ticks| ticks.get() >= Self::MIN)
+            .map(Self)
+    }
+
+    /// The bound in redstone ticks.
+    pub fn get(self) -> RedStoneTick {
+        self.0.get()
     }
 }

@@ -7,8 +7,8 @@ use nbs_fractal::layout::Metadata;
 use nbs_fractal::layout::compact::MultiCompactLayout;
 use nbs_fractal::layout::compose::WithFloor;
 use nbs_fractal::layout::linear::{MultiLinearLayout, StackedLinearLayout};
-use nbs_fractal::layout::{LayoutExt, torrent::TorrentLayout};
-use nbs_fractal::layout::{fishbone::MultiFishboneLayout, tapped::TappedLayout};
+use nbs_fractal::layout::tapped::{MaxTap, TappedLayout};
+use nbs_fractal::layout::{LayoutExt, fishbone::MultiFishboneLayout, torrent::TorrentLayout};
 use rsnbs::note::{Note, NoteStreamExt, Notes, Tone};
 use rsnbs::song::{Layer, Song};
 use rsnbs::types::{Position, Tick, TimeAnchor};
@@ -472,6 +472,9 @@ struct Tapped {
     /// Block spacing between adjacent tracks (0 = interlocked)
     #[arg(short, long, default_value_t = 0)]
     gap: u32,
+    /// Largest single tap delay, in redstone ticks (0 = unbounded, else >= 8)
+    #[arg(long = "max-tap", default_value_t = 0)]
+    max_tap: Tick,
     /// Add a full floor platform below the build
     #[arg(short, long)]
     full_floor: bool,
@@ -483,6 +486,14 @@ struct Tapped {
 impl Tapped {
     fn run(self) {
         let song = open_song(&self.input);
+        let max_tap = MaxTap::new(self.max_tap);
+        if self.max_tap > 0 && max_tap.is_none() {
+            eprintln!(
+                "tapped: --max-tap {} is below {}, left unbounded",
+                self.max_tap,
+                MaxTap::MIN
+            );
+        }
 
         // Split into TEC groups on the native ticks, then rescale each group as a
         // `(Tick, Event)` stream into redstone ticks before restoring. Rescaling
@@ -507,6 +518,7 @@ impl Tapped {
             tecs.clone(),
             NonZero::new(self.wrap),
             self.gap,
+            max_tap,
             self.full_floor,
             !self.no_balance,
         );
@@ -525,14 +537,14 @@ impl Tapped {
                 [tec.clone()],
                 NonZero::new(self.wrap),
                 self.gap,
+                max_tap,
                 self.full_floor,
                 !self.no_balance,
             );
             let size = alone.size();
             println!(
-                "  layer{}: taps={} size={}x{}x{} volume={}",
+                "  layer{}: size={}x{}x{} volume={}",
                 index + 1,
-                tec.offsets().filter(|&t| t > 0).count(),
                 size.x,
                 size.y,
                 size.z,
