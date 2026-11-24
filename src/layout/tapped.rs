@@ -3,11 +3,10 @@
 use super::blocks::{Facing, ToneBlocks, WireConn, chain_block, observer};
 use super::blocks::{redstone_torch, repeater, wire_state};
 use super::compact::{CompactLayout, RawCompact};
-use super::compose::{Arranged, EdgeArranged, WithFloor};
+use super::compose::{Arranged, EdgeArranged, Overlaid, WithFloor};
 use super::{Axis, Layout, LayoutExt};
 use crate::{BlockPos, BlockState, RedStoneTick, analysis::BoundedTec};
 use rsnbs::note::{Instrument, Key, Tone};
-use rsnbs::types::Tick;
 use std::collections::HashSet;
 use std::num::NonZero;
 
@@ -155,23 +154,25 @@ impl TapLine {
     ) -> Self {
         let mut taps = Vec::new();
         let mut prev = 0;
+        let mut carried = 0;
         for tick in ticks {
             let mut parts = split_gap(tick.get() - prev, max_tap);
             prev = tick.get();
             let head = parts.pop().expect("a gap is positive");
             for part in parts {
+                carried += part.get();
                 taps.push(Tap::new(part, repeater_coarse, false));
             }
+            carried += head.get();
             taps.push(Tap::new(head, repeater_coarse, true));
         }
-        debug_assert_eq!(
-            taps.iter().map(|tap| tap.delay.get()).sum::<RedStoneTick>(),
-            prev
-        );
+        debug_assert_eq!(carried, prev, "the taps carry exactly the line's span");
         let delays = EdgeArranged::new(taps, Axis::Southing, 0, Axis::Easting.unit(), &());
         let inner = delays.size();
         let width = inner.x.max(if switch { 5 } else { 2 });
-        let size = BlockPos::new(width, Tap::ELEVATION, inner.z + 1);
+        // an empty line still keeps the port's height
+        let height = inner.y.max(Bus::SIZE.y);
+        let size = BlockPos::new(width, height, inner.z + 1);
         let anchor = BlockPos::new(width - inner.x, 0, 1);
 
         Self {
@@ -226,20 +227,20 @@ impl TapLine {
     }
 }
 
-impl<Ctx> Layout<Ctx> for TapLine {
-    fn block_at_with(&self, pos: BlockPos, ctx: &Ctx) -> Option<BlockState> {
+impl Layout<()> for TapLine {
+    fn block_at_with(&self, pos: BlockPos, ctx: &()) -> Option<BlockState> {
         match pos.z == 0 {
             true => self.port(pos),
             false => self.delays.get_block_with(pos - self.anchor, ctx),
         }
     }
 
-    fn size_with(&self, _ctx: &Ctx) -> BlockPos {
+    fn size_with(&self, _ctx: &()) -> BlockPos {
         self.size
     }
 
     /// The port's fixed hardware, plus every delay element's palette.
-    fn block_palette_with(&self, ctx: &Ctx) -> HashSet<BlockState> {
+    fn block_palette_with(&self, ctx: &()) -> HashSet<BlockState> {
         let mut palette = self.port_palette();
         palette.extend(self.delays.block_palette_with(ctx));
         palette
@@ -249,9 +250,6 @@ impl<Ctx> Layout<Ctx> for TapLine {
 // Split
 //
 // ++++++++++++============++++++++++++============++++++++++++============
-
-/// The d4 repeater a relay puts on the bus, in redstone ticks.
-const SEAM: RedStoneTick = 4;
 
 /// The delays one gap's segments carry, none above `max`.
 ///
@@ -279,21 +277,14 @@ fn switch_button() -> BlockState {
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-/// One segment of the tapped delay line: a chain of repeaters, closed by the bus
-/// cell it ends on.
+/// One segment of the tapped delay line: a delay chain at the origin, with the
+/// bus column it ends on laid east of it.
 struct Tap {
-    /// The delay this segment carries, its bus seam included.
-    delay: NonZero<RedStoneTick>,
-    /// Whether the segment exposes its pulse, instead of relaying the bus onward.
-    out: bool,
-    /// The columns the chain spans: one per 8 ticks, plus the fixed head.
-    east: i32,
+    /// The chain and the column, overlaid without overlap.
+    inner: Overlaid<Chain, Bus>,
 }
 
 impl Tap {
-    const ELEVATION: i32 = 4;
-    const SOUTHING: i32 = 2;
-
     fn new(
         delay: NonZero<RedStoneTick>,
         repeater_coarse: Option<NonZero<RedStoneTick>>,
@@ -304,92 +295,185 @@ impl Tap {
             "coarse < 4 is not supported, adjust the step"
         );
 
-        let east = (delay.get() as i32 - 6) / 8 + 4;
-        Self { delay, out, east }
+        // one tick per lane, plus the chain's floor
+        let lanes = if out { 1 } else { 2 };
+        let least = Chain::MIN_DELAY + lanes * Bus::MIN_LANE_DELAY;
+        assert!(
+            delay.get() >= least,
+            "a segment carries at least {least} rt, got {}",
+            delay.get()
+        );
+
+        // the bus takes what it can, the chain the rest
+        let absorbed = (delay.get() - Chain::MIN_DELAY).min(lanes * Bus::MAX_LANE_DELAY);
+        let back = if out { 0 } else { absorbed / 2 };
+        let bus = Bus::new(absorbed - back, back);
+
+        let chain = Chain::new(delay.get() - absorbed);
+        let (chain_size, bus_size) = (chain.size(), bus.size());
+        let size = BlockPos::new(
+            chain_size.x + bus_size.x,
+            chain_size.y.max(bus_size.y),
+            chain_size.z.max(bus_size.z),
+        );
+        let anchor = BlockPos::new(chain_size.x, 0, 0);
+        let inner = Overlaid::new(BlockPos::ORIGIN, chain, anchor, bus, size, &());
+        Self { inner }
+    }
+}
+
+impl Layout<()> for Tap {
+    fn block_at_with(&self, pos: BlockPos, ctx: &()) -> Option<BlockState> {
+        self.inner.block_at_with(pos, ctx)
     }
 
-    /// The delay chain west of the bus column, drawn for `local_pos` and `delay`.
-    ///
-    /// `delay` is what the chain itself carries: the segment's delay already short
-    /// of both bus cells, so every offset below counts chain rt only.
-    fn chain(&self, local_pos: BlockPos, delay: RedStoneTick) -> Option<BlockState> {
-        use WireConn::*;
-        let back = self.east - local_pos.x;
+    fn size_with(&self, ctx: &()) -> BlockPos {
+        self.inner.size_with(ctx)
+    }
 
-        match (back, local_pos.x, local_pos.z, local_pos.y) {
+    fn block_palette_with(&self, ctx: &()) -> HashSet<BlockState> {
+        self.inner.block_palette_with(ctx)
+    }
+}
+
+// Bus
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+/// The bus column a segment ends on: one cell, two lanes of delay.
+struct Bus {
+    /// The lane ahead, `z = 0`: the pulse leaves here, toward the port.
+    front: RedStoneTick,
+    /// The lane behind, `z = 1`: the chain and the deeper taps feed here.
+    back: RedStoneTick,
+}
+
+impl Bus {
+    /// The shortest delay one lane's repeater holds.
+    const MIN_LANE_DELAY: RedStoneTick = 1;
+
+    /// The longest delay one lane's repeater holds.
+    const MAX_LANE_DELAY: RedStoneTick = 4;
+
+    /// The column's own box.
+    const SIZE: BlockPos = BlockPos::new(1, 4, 2);
+
+    /// A column carrying these two lane delays; panics above [`Bus::MAX_LANE_DELAY`].
+    fn new(front: RedStoneTick, back: RedStoneTick) -> Self {
+        assert!(
+            front <= Self::MAX_LANE_DELAY && back <= Self::MAX_LANE_DELAY,
+            "a bus lane holds at most {} rt, got {front} and {back}",
+            Self::MAX_LANE_DELAY
+        );
+        Self { front, back }
+    }
+
+    /// The block a lane draws: wire at zero, else a repeater of that many ticks.
+    fn lane(delay: RedStoneTick) -> BlockState {
+        use WireConn::{Idle, Side};
+        match delay {
+            0 => wire_state(Idle, Idle, Side, Side, "0"),
+            tick => repeater(tick.to_string(), Facing::North, false, false),
+        }
+    }
+}
+
+impl Layout<()> for Bus {
+    fn block_at_with(&self, pos: BlockPos, _ctx: &()) -> Option<BlockState> {
+        match (pos.z, pos.y) {
+            (0, 2) => Some(Self::lane(self.front)),
+            (1, 2) => Some(Self::lane(self.back)),
+            (_, 1) => Some(chain_block()),
+            _ => Option::None,
+        }
+    }
+
+    fn size_with(&self, _ctx: &()) -> BlockPos {
+        Self::SIZE
+    }
+
+    /// Both lane states.
+    fn block_palette_with(&self, _ctx: &()) -> HashSet<BlockState> {
+        let mut palette = HashSet::from([chain_block()]);
+        for lane in [self.front, self.back] {
+            palette.insert(Self::lane(lane));
+        }
+        palette
+    }
+}
+
+// Chain
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+/// A delay chain carrying exactly the redstone ticks it was built with.
+struct Chain {
+    delay: RedStoneTick,
+}
+
+impl Chain {
+    /// The least delay one chain carries: a repeater between its two torches.
+    const MIN_DELAY: RedStoneTick = 3;
+
+    /// The run's depth, `z = 0..2`.
+    const SOUTHING: i32 = 2;
+
+    /// The run's height, its block row included.
+    const ELEVATION: i32 = 4;
+
+    /// A chain carrying `delay` ticks; panics under [`Chain::MIN_DELAY`].
+    fn new(delay: RedStoneTick) -> Self {
+        assert!(
+            delay >= Self::MIN_DELAY,
+            "a chain carries at least {} rt, got {delay}",
+            Self::MIN_DELAY
+        );
+        Self { delay }
+    }
+
+    /// The columns spanned: one per eight ticks, plus head and entry.
+    fn columns(&self) -> i32 {
+        (self.delay as i32 - 2) / 8 + 3
+    }
+}
+
+impl Layout<()> for Chain {
+    fn block_at_with(&self, pos: BlockPos, _ctx: &()) -> Option<BlockState> {
+        use WireConn::*;
+        let back = self.columns() + 1 - pos.x;
+        let delay = self.delay;
+        let clamp = |tick: RedStoneTick| tick.min(4).to_string();
+        let cycle = || clamp((delay + 7) % 8);
+        let decay = |sub: RedStoneTick| clamp(delay.saturating_sub(sub));
+
+        match (back, pos.x, pos.z, pos.y) {
             (_, _, _, 1) | (_, 0, 0, 2) | (2, _, 1, 2) => Some(chain_block()),
             (_, 0, 1, 2) => Some(redstone_torch(Some("south"), false)),
             (2, _, 0, 2) => Some(redstone_torch(Some("south"), true)),
             (4.., 2.., 0, 2) => Some(repeater("4", Facing::West, true, false)),
             (3.., 2.., 1, 2) => Some(repeater("4", Facing::East, false, false)),
-            (3, 1, 1, 2) => Some(repeater(
-                delay.saturating_sub(2).min(4).to_string(),
-                Facing::East,
-                false,
-                false,
-            )),
-            (4.., 1, 1, 2) => Some(repeater(
-                ((delay + 7) % 8).min(4).to_string(),
-                Facing::East,
-                false,
-                false,
-            )),
+            (3, 1, 1, 2) => Some(repeater(decay(2), Facing::East, false, false)),
+            (4.., 1, 1, 2) => Some(repeater(cycle(), Facing::East, false, false)),
             (3, 1, 0, 2) if delay < 7 => Some(wire_state(Side, Side, Idle, Idle, "15")),
-            (3, 1, 0, 2) => Some(repeater(
-                delay.saturating_sub(6).min(4).to_string(),
-                Facing::East,
-                false,
-                false,
-            )),
+            (3, 1, 0, 2) => Some(repeater(decay(6), Facing::East, false, false)),
             (3, 2.., 0, 2) if (delay + 7) % 8 < 4 => Some(wire_state(Side, Side, Idle, Idle, "15")),
-            (3, 2.., 0, 2) => Some(repeater(
-                ((delay + 7) % 8).min(4).to_string(),
-                Facing::West,
-                true,
-                false,
-            )),
+            (3, 2.., 0, 2) => Some(repeater(cycle(), Facing::West, true, false)),
             (4.., 1, 0, 2) => Some(repeater("3", Facing::West, true, false)),
             _ => Option::None,
         }
     }
-}
 
-impl<Ctx> Layout<Ctx> for Tap {
-    /// The delay line of one segment: the bus column it ends on, then the chain
-    /// west of it.
-    fn block_at_with(&self, pos: BlockPos, _ctx: &Ctx) -> Option<BlockState> {
-        use WireConn::{Idle, Side};
-        let back = self.east - pos.x;
-        let delay = self.delay.get();
-        let tap = delay.saturating_sub(3).min(4);
-        let bus = match self.out {
-            true => tap,
-            false => tap + SEAM,
-        };
-
-        match (back, pos.z, pos.y) {
-            (1, 1, 2) if self.out => Some(wire_state(Idle, Idle, Side, Side, "0")),
-            (1, 1, 2) => Some(repeater(SEAM.to_string(), Facing::North, false, false)),
-            (1, 0, 2) => Some(repeater(tap.to_string(), Facing::North, false, false)),
-            (1, _, 1) => Some(chain_block()),
-            (1, _, _) => Option::None,
-            _ => self.chain(pos, delay.saturating_sub(bus)),
-        }
+    fn size_with(&self, _ctx: &()) -> BlockPos {
+        BlockPos::new(self.columns(), Self::ELEVATION, Self::SOUTHING)
     }
 
-    fn size_with(&self, _ctx: &Ctx) -> BlockPos {
-        BlockPos::new(self.east, Self::ELEVATION, Self::SOUTHING)
-    }
-
-    /// The blocks a delay element can draw: its chain, torches, repeaters and the
-    /// wire links that carry its tapped delay.
-    fn block_palette_with(&self, _ctx: &Ctx) -> HashSet<BlockState> {
-        use Facing::{East, North, West};
+    /// Every state the run draws.
+    fn block_palette_with(&self, _ctx: &()) -> HashSet<BlockState> {
+        use Facing::{East, West};
         use WireConn::*;
-        let delay = self.delay.get();
-        let clamp = |tick: Tick| tick.min(4).to_string();
-        let cycle = |off: Tick, modu: Tick| clamp((delay + off) % modu);
-        let decay = |sub: Tick| clamp(delay.saturating_sub(sub));
+        let delay = self.delay;
+        let clamp = |tick: RedStoneTick| tick.min(4).to_string();
+        let cycle = clamp((delay + 7) % 8);
         HashSet::from([
             chain_block(),
             redstone_torch(Some("south"), false),
@@ -397,12 +481,10 @@ impl<Ctx> Layout<Ctx> for Tap {
             repeater("3", West, true, false),
             repeater("4", West, true, false),
             repeater("4", East, false, false),
-            repeater(decay(3), North, false, false),
-            repeater(decay(6), East, false, false),
-            repeater(decay(10), East, false, false),
-            repeater(cycle(3, 8), East, false, false),
-            repeater(cycle(3, 8), West, true, false),
-            wire_state(Idle, Idle, Side, Side, "0"),
+            repeater(clamp(delay.saturating_sub(2)), East, false, false),
+            repeater(clamp(delay.saturating_sub(6)), East, false, false),
+            repeater(cycle.clone(), East, false, false),
+            repeater(cycle, West, true, false),
             wire_state(Side, Side, Idle, Idle, "15"),
         ])
     }
@@ -421,8 +503,8 @@ impl<Ctx> Layout<Ctx> for Tap {
 pub struct MaxTap(NonZero<RedStoneTick>);
 
 impl MaxTap {
-    /// Smallest realizable bound: an even split of it still leaves every relay a
-    /// seam and a tick.
+    /// Smallest realizable bound: the shortest relay a split can yield still
+    /// keeps its chain floor and a tick per lane.
     pub const MIN: RedStoneTick = 8;
 
     /// The bound, or `None` when `ticks` cannot carry a split.
