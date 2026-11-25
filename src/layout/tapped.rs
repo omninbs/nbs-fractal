@@ -30,13 +30,13 @@ impl TappedLayout {
     /// kernel drives the playing unit. With `balanced`, the playing lines stretch
     /// their row intervals so they fit within the longest line's span, flooring
     /// the interval to whole blocks; otherwise every line keeps the base pitch.
-    /// `max_tap` bounds one tap's delay; a larger gap is carried by several taps
-    /// in a row, so no single tap grows past the bound.
+    /// `max_gain` caps one tap's length; a larger gap is carried by several taps
+    /// in a row, so no single tap grows past the cap.
     pub fn new<I: IntoIterator<Item = BoundedTec<Tone>>>(
         tecs: I,
         wrap_length: Option<NonZero<usize>>,
         gap: u32,
-        max_tap: Option<MaxTap>,
+        max_gain: Option<u32>,
         full: bool,
         balanced: bool,
     ) -> Self {
@@ -59,7 +59,7 @@ impl TappedLayout {
 
             // the bottom line carries the switch
             let switch = lyr + 1 == count;
-            tap_lines.push(TapLine::new(tec.scatter, repeater_coarse, switch, max_tap));
+            tap_lines.push(TapLine::new(tec.scatter, repeater_coarse, switch, max_gain));
             raws.push(raw);
         }
 
@@ -144,19 +144,19 @@ pub struct TapLine {
 impl TapLine {
     /// Builds a TEC's tapped delay line from its ascending offsets, each tap
     /// driven by the gap to the previous offset; `switch` adds the closing tap,
-    /// and `max_tap` bounds one tap's delay by spreading a wider gap over a row
-    /// of taps whose last one exposes the pulse.
+    /// and `max_gain` caps one tap's length by spreading a wider gap over a row of
+    /// taps whose last one exposes the pulse.
     pub fn new<I: IntoIterator<Item = NonZero<RedStoneTick>>>(
         ticks: I,
         repeater_coarse: Option<NonZero<RedStoneTick>>,
         switch: bool,
-        max_tap: Option<MaxTap>,
+        max_gain: Option<u32>,
     ) -> Self {
         let mut taps = Vec::new();
         let mut prev = 0;
         let mut carried = 0;
         for tick in ticks {
-            let mut parts = split_gap(tick.get() - prev, max_tap);
+            let mut parts = split_gap(tick.get() - prev, max_gain);
             prev = tick.get();
             let head = parts.pop().expect("a gap is positive");
             for part in parts {
@@ -251,13 +251,13 @@ impl Layout<()> for TapLine {
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-/// The delays one gap's segments carry, none above `max`.
+/// The delays one gap's segments carry, none above the capacity of `max_gain`.
 ///
-/// A gap within `max` stays a single segment. A longer one is spread over
-/// `ceil(gap / max)` segments of near-equal delay, so the widest shrinks with the
-/// count while the group still carries exactly `gap`.
-fn split_gap(gap: RedStoneTick, max: Option<MaxTap>) -> Vec<NonZero<RedStoneTick>> {
-    let max = max.map_or(gap, MaxTap::get).max(1);
+/// A gap within that capacity stays a single segment. A longer one is spread
+/// over `ceil(gap / capacity)` segments of near-equal delay, so the widest
+/// shrinks with the count while the group still carries exactly `gap`.
+fn split_gap(gap: RedStoneTick, max_gain: Option<u32>) -> Vec<NonZero<RedStoneTick>> {
+    let max = max_gain.map_or(gap, Tap::capacity).max(1);
     let count = gap.div_ceil(max);
     let base = gap / count;
     let rest = gap % count;
@@ -295,21 +295,18 @@ impl Tap {
             "coarse < 4 is not supported, adjust the step"
         );
 
-        // one tick per lane, plus the chain's floor
-        let lanes = if out { 1 } else { 2 };
-        let least = Chain::MIN_DELAY + lanes * Bus::MIN_LANE_DELAY;
         assert!(
-            delay.get() >= least,
-            "a segment carries at least {least} rt, got {}",
+            delay.get() >= Chain::MIN_DELAY,
+            "a segment carries at least {} rt, got {}",
+            Chain::MIN_DELAY,
             delay.get()
         );
 
-        // the bus takes what it can, the chain the rest
-        let absorbed = (delay.get() - Chain::MIN_DELAY).min(lanes * Bus::MAX_LANE_DELAY);
-        let back = if out { 0 } else { absorbed / 2 };
-        let bus = Bus::new(absorbed - back, back);
+        // the bus takes its lanes' worth first, the chain carries the rest
+        let (chain_delay, front, back) = Self::pieces(delay.get(), out);
+        let bus = Bus::new(front, back);
 
-        let chain = Chain::new(delay.get() - absorbed);
+        let chain = Chain::new(chain_delay);
         let (chain_size, bus_size) = (chain.size(), bus.size());
         let size = BlockPos::new(
             chain_size.x + bus_size.x,
@@ -319,6 +316,27 @@ impl Tap {
         let anchor = BlockPos::new(chain_size.x, 0, 0);
         let inner = Overlaid::new(BlockPos::ORIGIN, chain, anchor, bus, size, &());
         Self { inner }
+    }
+
+    /// The chain delay and the two lane delays a segment of `delay` ticks needs.
+    ///
+    /// The bus comes first: after the chain's floor, it takes as much as its
+    /// lanes reach, so the drawn chain shrinks below the length its delay alone
+    /// would ask for. An exposing segment leaves its back lane idle.
+    fn pieces(delay: RedStoneTick, out: bool) -> (RedStoneTick, RedStoneTick, RedStoneTick) {
+        let reach = match out {
+            true => Bus::MAX_LANE_DELAY,
+            false => 2 * Bus::MAX_LANE_DELAY,
+        };
+        let bus = (delay - Chain::MIN_DELAY).min(reach);
+        let back = if out { 0 } else { bus / 2 };
+        (delay - bus, bus - back, back)
+    }
+
+    /// The most delay a segment of `gain` length gains carries: the chain of that
+    /// length, plus the lanes an exposing segment still reaches.
+    fn capacity(gain: u32) -> RedStoneTick {
+        Chain::max_delay(Chain::BASE_COLUMNS + gain as i32) + Bus::MAX_LANE_DELAY
     }
 }
 
@@ -349,9 +367,6 @@ struct Bus {
 }
 
 impl Bus {
-    /// The shortest delay one lane's repeater holds.
-    const MIN_LANE_DELAY: RedStoneTick = 1;
-
     /// The longest delay one lane's repeater holds.
     const MAX_LANE_DELAY: RedStoneTick = 4;
 
@@ -415,6 +430,12 @@ impl Chain {
     /// The least delay one chain carries: a repeater between its two torches.
     const MIN_DELAY: RedStoneTick = 3;
 
+    /// The delay one column past the head adds.
+    const TICKS_PER_COLUMN: RedStoneTick = 8;
+
+    /// The head's columns, before any gain.
+    const BASE_COLUMNS: i32 = 3;
+
     /// The run's depth, `z = 0..2`.
     const SOUTHING: i32 = 2;
 
@@ -431,9 +452,14 @@ impl Chain {
         Self { delay }
     }
 
+    /// The most delay a chain of `columns` carries, its last column included.
+    fn max_delay(columns: i32) -> RedStoneTick {
+        Self::TICKS_PER_COLUMN * columns as RedStoneTick - 15
+    }
+
     /// The columns spanned: one per eight ticks, plus head and entry.
     fn columns(&self) -> i32 {
-        (self.delay as i32 - 2) / 8 + 3
+        ((self.delay - 2) / Self::TICKS_PER_COLUMN) as i32 + Self::BASE_COLUMNS
     }
 }
 
@@ -487,35 +513,5 @@ impl Layout<()> for Chain {
             repeater(cycle, West, true, false),
             wire_state(Side, Side, Idle, Idle, "15"),
         ])
-    }
-}
-
-// MaxTap
-//
-// ++++++++++++============++++++++++++============++++++++++++============
-
-/// Upper bound on one segment's delay, in redstone ticks.
-///
-/// A bound under [`MaxTap::MIN`] cannot be split into segments that each outlast
-/// a bus seam, so the constructor reads it as no bound, just as [`NonZero::new`]
-/// reads zero.
-#[derive(Clone, Copy)]
-pub struct MaxTap(NonZero<RedStoneTick>);
-
-impl MaxTap {
-    /// Smallest realizable bound: the shortest relay a split can yield still
-    /// keeps its chain floor and a tick per lane.
-    pub const MIN: RedStoneTick = 8;
-
-    /// The bound, or `None` when `ticks` cannot carry a split.
-    pub fn new(ticks: RedStoneTick) -> Option<Self> {
-        NonZero::new(ticks)
-            .filter(|ticks| ticks.get() >= Self::MIN)
-            .map(Self)
-    }
-
-    /// The bound in redstone ticks.
-    pub fn get(self) -> RedStoneTick {
-        self.0.get()
     }
 }
