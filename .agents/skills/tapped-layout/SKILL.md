@@ -14,7 +14,7 @@ TE=./target/release/nbs-fractal-tec
 cp SONG.nbs out/NAME.nbs
 $TE scan out/NAME.nbs --layers 2 --max-gap 102
 $NB match out/NAME.nbs out/NAME_3l.tec.nbs -r A -r B
-$NB tapped out/NAME_3l.tec.nbs out/tapped_3l.litematic -w 18 --max-gain 43
+$NB tapped out/NAME_3l.tec.nbs out/tapped_3l.litematic -w 18 --max-gain 7
 $TE verify out/NAME_3l.tec.nbs
 ```
 
@@ -45,17 +45,11 @@ delay <= 8 * gain + 13       // an exposing tap
 delay <= 8 * gain + 17       // a middle tap, its back lane 4 rt deeper
 ```
 
-The bus lanes take their 4 rt each before the chain does, so a tap is often one
-column shorter than its delay alone suggests: 11 rt still fits width 4.
+The lanes take 4 rt each first, so an 11 rt tap still fits width 4.
 
-Width 16 peaks at 109 rt; `--max-gap 102` is the rounded cap used here.
-Without a cap a scatter took 688 rt on this song, 89 blocks wide.
-
-`tapped --max-gain <n>` caps a tap at width `4 + n`: a longer gap rides several
-taps in a row, narrower and deeper, timing unchanged. Omit it for no cap;
-`--max-gain 0` keeps every tap at width 4. With it, `scan --max-gap` can be
-raised or left at 0. An added tap costs a row pair plus two torches; pick the
-cap that lowers the volume.
+Always pass `--max-gain 7`: width 11 holds 69 rt, 73 for a middle tap, so a
+`-r 128` rule's 64 rt stays one tap. A wider gap rides a row of taps, timing
+unchanged. Never omit it: unbounded, a scatter took 688 rt at 89 blocks wide.
 
 Gaps are rt, rules are raw ticks. At tempo 18 two raw ticks make one rt, so
 `-r 128` is 64 rt.

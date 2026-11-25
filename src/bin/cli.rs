@@ -486,7 +486,6 @@ struct Tapped {
 impl Tapped {
     fn run(self) {
         let song = open_song(&self.input);
-        let max_gain = self.max_gain;
 
         // Split into TEC groups on the native ticks, then rescale each group as a
         // `(Tick, Event)` stream into redstone ticks before restoring. Rescaling
@@ -511,7 +510,7 @@ impl Tapped {
             tecs.clone(),
             NonZero::new(self.wrap),
             self.gap,
-            max_gain,
+            self.max_gain,
             self.full_floor,
             !self.no_balance,
         );
@@ -530,7 +529,7 @@ impl Tapped {
                 [tec.clone()],
                 NonZero::new(self.wrap),
                 self.gap,
-                max_gain,
+                self.max_gain,
                 self.full_floor,
                 !self.no_balance,
             );
