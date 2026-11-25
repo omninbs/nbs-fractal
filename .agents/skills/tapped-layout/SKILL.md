@@ -62,11 +62,16 @@ reuse 5658.
 
 # Optimal
 
-`scan` is a beam, not a proof. Widen `--top` and `--max-arity` until the
-numbers stop moving; a small `--max-arity` hides wide scatters.
+`scan` is a beam, not a proof, and it scores each layer alone.
 
-Per layer on 12 cores: `8/6` ~15 s, `16/10` ~55 s, `24/12` ~70 s, `32/16`
-~110 s. Nearby tiers agreeing is a stop rule, not a proof.
+Orders are coupled: `match` drains one residual rule after rule, so a rule's
+reuse depends on what ran before it. Reordering a greedy plan gave 6422 to
+6423; a fine ladder first (raw 48,64,80,96,112) gave 6585, past the beam's own
+6427. Widening `--top`/`--max-arity` cannot see that.
+
+Search ordered plans in process: `BoundedTec::extract_from` the plane per rule
+and sum `reuse()`. Keep taps legal (gaps 16 raw ticks or more, within the
+window), then climb with add, drop, swap and reorder. Two minutes beats a beam.
 
 No settings, no "optimal".
 
