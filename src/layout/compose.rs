@@ -277,6 +277,127 @@ impl<Ctx, L: Layout<Ctx>> Layout<Ctx> for EvenlyArranged<L> {
     }
 }
 
+// LatticeArranged
+//
+// ++++++++++++============++++++++++++============++++++++++++============
+
+/// Names the two maps that place items: `forward` gives item `i`'s anchor and
+/// `inverse` gives the last item whose anchor has not passed a position, the
+/// two inverting each other.
+///
+/// A named implementation is what lets a composite type spell the field it
+/// stores, while a closure pair is what lets an ad-hoc arrangement stay
+/// anonymous.
+pub trait Lattice {
+    /// Anchor of item `i`.
+    fn forward(&self, i: usize) -> BlockPos;
+
+    /// Last item whose anchor does not pass `pos`.
+    fn inverse(&self, pos: BlockPos) -> usize;
+}
+
+/// Any pair of closures of the right shapes is a lattice.
+impl<F, G> Lattice for (F, G)
+where
+    F: Fn(usize) -> BlockPos,
+    G: Fn(BlockPos) -> usize,
+{
+    fn forward(&self, i: usize) -> BlockPos {
+        (self.0)(i)
+    }
+
+    fn inverse(&self, pos: BlockPos) -> usize {
+        (self.1)(pos)
+    }
+}
+
+/// Arranges sub-layouts at the anchors a [`Lattice`] names.
+///
+/// Query cost is O(k) with `k` the candidate window width, independent of the
+/// item count: the window top is one `inverse` call, the measured span covers
+/// the rest, and no search over anchors happens at query time. Anchors need not
+/// be evenly spaced, so the lattice may describe any non-decreasing progression,
+/// including one whose steps grow. They may also lie at negative coordinates;
+/// the box shifts to the origin.
+pub struct LatticeArranged<L, K> {
+    /// Sub-layouts in anchor order; item `i` sits at `lattice.forward(i)`.
+    items: Vec<L>,
+    /// The anchors, as maps rather than as a list.
+    lattice: K,
+    /// Least window width that still reaches the highest covering item.
+    span: usize,
+    /// Shift making the least anchor the box origin.
+    origin: BlockPos,
+    /// Bounding box size, zero when empty.
+    size: BlockPos,
+}
+
+impl<L, K: Lattice> LatticeArranged<L, K> {
+    /// Arranges `items` at the anchors `lattice` names.
+    pub fn new<Ctx, I>(items: I, lattice: K, ctx: &Ctx) -> Self
+    where
+        I: IntoIterator<Item = L>,
+        L: Layout<Ctx>,
+    {
+        let items = Vec::from_iter(items);
+        let inner: Vec<BlockPos> = items
+            .iter()
+            .map(|item| (item.size_with(ctx) - BlockPos::UNIT).max(BlockPos::ORIGIN))
+            .collect();
+        let anchors: Vec<BlockPos> = (0..items.len()).map(|i| lattice.forward(i)).collect();
+        debug_assert!(
+            (0..items.len()).all(|i| lattice.inverse(anchors[i]) >= i),
+            "inverse must not run ahead of forward"
+        );
+
+        let origin = anchors.iter().copied().fold(BlockPos::ORIGIN, BlockPos::min);
+        let size = (0..items.len())
+            .map(|i| anchors[i] + inner[i] + BlockPos::UNIT)
+            .fold(BlockPos::ORIGIN, BlockPos::max)
+            - origin;
+        let span = (0..items.len())
+            .map(|i| lattice.inverse(anchors[i] + inner[i]).saturating_sub(i))
+            .max()
+            .unwrap_or_default();
+        Self {
+            items,
+            lattice,
+            span,
+            origin,
+            size,
+        }
+    }
+}
+
+impl<Ctx, L, K> Layout<Ctx> for LatticeArranged<L, K>
+where
+    L: Layout<Ctx>,
+    K: Lattice,
+{
+    fn block_at_with(&self, pos: BlockPos, ctx: &Ctx) -> Option<BlockState> {
+        let last = self.items.len().checked_sub(1)?;
+        let world = pos + self.origin;
+        let top = self.lattice.inverse(world).min(last);
+        let bottom = top.saturating_sub(self.span);
+        (bottom..=top)
+            .rev()
+            .find_map(|i| self.items[i].get_block_with(world - self.lattice.forward(i), ctx))
+    }
+
+    fn size_with(&self, _ctx: &Ctx) -> BlockPos {
+        self.size
+    }
+
+    /// The union of every item's palette.
+    fn block_palette_with(&self, ctx: &Ctx) -> HashSet<BlockState> {
+        let mut palette = HashSet::new();
+        for item in &self.items {
+            palette.extend(item.block_palette_with(ctx));
+        }
+        palette
+    }
+}
+
 // Overlaid
 //
 // ++++++++++++============++++++++++++============++++++++++++============
