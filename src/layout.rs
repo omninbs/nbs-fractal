@@ -7,6 +7,7 @@ pub mod compose;
 pub mod copper;
 pub mod fishbone;
 pub mod linear;
+pub mod tap;
 pub mod tapped;
 pub mod torrent;
 pub use base::{Axis, Layout, LayoutExt, Mask};
