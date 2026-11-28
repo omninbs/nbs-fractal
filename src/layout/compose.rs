@@ -2,7 +2,8 @@
 //! another, and the floor they may stand on.
 
 use super::base::{Axis, Layout, Mask};
-use crate::{BlockPos, BlockState};
+use super::base::{signed, size_of};
+use crate::{BlockPos, BlockSize, BlockState};
 use std::collections::HashSet;
 
 // Provided
@@ -31,7 +32,7 @@ impl<Ctx, L: Layout<Ctx>> Layout<()> for Provided<Ctx, L> {
         self.inner.block_at_with(pos, &self.ctx)
     }
 
-    fn size_with(&self, _ctx: &()) -> BlockPos {
+    fn size_with(&self, _ctx: &()) -> BlockSize {
         self.inner.size_with(&self.ctx)
     }
 
@@ -64,7 +65,7 @@ pub struct Arranged<L> {
     /// Whether `starts` is non-decreasing and can be binary-searched.
     ordered: bool,
     axis: Axis,
-    size: BlockPos,
+    size: BlockSize,
 }
 
 impl<L> Arranged<L> {
@@ -83,7 +84,7 @@ impl<L> Arranged<L> {
         let mut placed = Vec::new();
 
         for layout in layouts {
-            let size: BlockPos = layout.size_with(ctx);
+            let size = signed(layout.size_with(ctx));
             let start = cursor;
             let far = start + unit.dot(size);
             cursor = far + gap;
@@ -120,7 +121,7 @@ impl<L> Arranged<L> {
             ends,
             ordered,
             axis,
-            size,
+            size: size_of(size),
         }
     }
 }
@@ -141,7 +142,7 @@ impl<Ctx, L: Layout<Ctx>> Layout<Ctx> for Arranged<L> {
         })
     }
 
-    fn size_with(&self, _ctx: &Ctx) -> BlockPos {
+    fn size_with(&self, _ctx: &Ctx) -> BlockSize {
         self.size
     }
 
@@ -176,7 +177,7 @@ impl<Ctx, L: Layout<Ctx>> Layout<Ctx> for EdgeArranged<L> {
         self.0.block_at_with(pos, ctx)
     }
 
-    fn size_with(&self, ctx: &Ctx) -> BlockPos {
+    fn size_with(&self, ctx: &Ctx) -> BlockSize {
         self.0.size_with(ctx)
     }
 
@@ -215,7 +216,7 @@ pub struct Sequenced<L, K> {
     /// Anchor-space shift: added to a box position before the sequence is asked.
     origin: BlockPos,
     /// Bounding box size, zero when empty.
-    size: BlockPos,
+    size: BlockSize,
 }
 
 impl<L, K> Sequenced<L, K> {
@@ -229,7 +230,7 @@ impl<L, K> Sequenced<L, K> {
         let items = Vec::from_iter(items);
         let (origin, far) = items
             .iter()
-            .map(|(anchor, item)| (*anchor, *anchor + item.size_with(ctx)))
+            .map(|(anchor, item)| (*anchor, *anchor + signed(item.size_with(ctx))))
             .fold(
                 (BlockPos::ORIGIN, BlockPos::ORIGIN),
                 |(least, far), (a, end)| (least.min(a), far.max(end)),
@@ -238,7 +239,7 @@ impl<L, K> Sequenced<L, K> {
             items,
             sequence,
             origin,
-            size: far - origin,
+            size: size_of(far - origin),
         }
     }
 }
@@ -256,7 +257,7 @@ where
         })
     }
 
-    fn size_with(&self, _ctx: &Ctx) -> BlockPos {
+    fn size_with(&self, _ctx: &Ctx) -> BlockSize {
         self.size
     }
 
@@ -298,7 +299,7 @@ pub struct EvenlyArranged<L> {
     /// `M = |pitch|.ones`.
     span: i32,
     /// Bounding box size: `pitch.abs() * (len - 1) + extent`, zero when empty.
-    size: BlockPos,
+    size: BlockSize,
 }
 
 impl<L> EvenlyArranged<L> {
@@ -312,7 +313,7 @@ impl<L> EvenlyArranged<L> {
         let items = Vec::from_iter(items);
         let extent = items
             .iter()
-            .map(|item| item.size_with(ctx))
+            .map(|item| signed(item.size_with(ctx)))
             .fold(BlockPos::ORIGIN, BlockPos::max);
         let far = (items.len() as i32 - 1).max(0);
 
@@ -330,7 +331,7 @@ impl<L> EvenlyArranged<L> {
             spacing,
             bias: -behind,
             span: (ahead + behind) / spacing,
-            size: pitch.abs() * far + extent,
+            size: size_of(pitch.abs() * far + extent),
         }
     }
 }
@@ -348,7 +349,7 @@ impl<Ctx, L: Layout<Ctx>> Layout<Ctx> for EvenlyArranged<L> {
             .find_map(|i| self.items[i as usize].get_block_with(local_pos - self.pitch * i, ctx))
     }
 
-    fn size_with(&self, _ctx: &Ctx) -> BlockPos {
+    fn size_with(&self, _ctx: &Ctx) -> BlockSize {
         self.size
     }
 
@@ -372,7 +373,7 @@ impl<Ctx, L: Layout<Ctx>> Layout<Ctx> for EvenlyArranged<L> {
 pub struct Overlaid<A, B> {
     first: (BlockPos, A),
     second: (BlockPos, B),
-    size: BlockPos,
+    size: BlockSize,
 }
 
 impl<A, B> Overlaid<A, B> {
@@ -382,14 +383,15 @@ impl<A, B> Overlaid<A, B> {
         first: A,
         second_anchor: BlockPos,
         second: B,
-        size: BlockPos,
+        size: BlockSize,
         ctx: &Ctx,
     ) -> Self
     where
         A: Layout<Ctx>,
         B: Layout<Ctx>,
     {
-        fn anchor(anchor: BlockPos, inner: BlockPos, size: BlockPos) -> BlockPos {
+        fn anchor(anchor: BlockPos, inner: BlockSize, size: BlockSize) -> BlockPos {
+            let (inner, size) = (signed(inner), signed(size));
             let axis = |a: i32, i: i32, s: i32| if a < 0 { s - i + a + 1 } else { a };
             let x = axis(anchor.x, inner.x, size.x);
             let y = axis(anchor.y, inner.y, size.y);
@@ -413,7 +415,7 @@ impl<Ctx, A: Layout<Ctx>, B: Layout<Ctx>> Layout<Ctx> for Overlaid<A, B> {
         })
     }
 
-    fn size_with(&self, _ctx: &Ctx) -> BlockPos {
+    fn size_with(&self, _ctx: &Ctx) -> BlockSize {
         self.size
     }
 
@@ -447,7 +449,7 @@ impl<L> Reverse<L> {
     where
         L: Layout<Ctx>,
     {
-        let bias = sign * (layout.size_with(ctx) - BlockPos::new(1, 1, 1));
+        let bias = sign * (signed(layout.size_with(ctx)) - BlockPos::new(1, 1, 1));
         let factor = BlockPos::new(1, 1, 1) - sign * 2;
         Self {
             layout,
@@ -467,7 +469,7 @@ impl<Ctx, L: Layout<Ctx>> Layout<Ctx> for Reverse<L> {
         self.layout.block_at_with(orig, ctx)
     }
 
-    fn size_with(&self, ctx: &Ctx) -> BlockPos {
+    fn size_with(&self, ctx: &Ctx) -> BlockSize {
         self.layout.size_with(ctx)
     }
 
@@ -507,9 +509,9 @@ impl<Ctx, L: Layout<Ctx>> Layout<Ctx> for WithFloor<L> {
         }
     }
 
-    fn size_with(&self, ctx: &Ctx) -> BlockPos {
+    fn size_with(&self, ctx: &Ctx) -> BlockSize {
         let size = self.layout.size_with(ctx);
-        BlockPos::new(size.x, size.y + 1, size.z)
+        BlockSize::new(size.x, size.y + 1, size.z)
     }
 
     /// The inner palette plus the floor block, the only block this wrapper adds
@@ -541,11 +543,12 @@ impl NeedsFloor for BlockState {
 ///
 /// A non-negative component `n` shifts the inner layout by `n` and shrinks
 /// the size by `n`; a negative component keeps the inner layout in place and
-/// shrinks the size by `-n`.
+/// shrinks the size by `-n`. Clipping away more than the box holds leaves it
+/// empty rather than reversed.
 pub struct Clipped<L> {
     layout: L,
     anchor: BlockPos,
-    size: BlockPos,
+    size: BlockSize,
 }
 
 impl<L> Clipped<L> {
@@ -555,12 +558,12 @@ impl<L> Clipped<L> {
         L: Layout<Ctx>,
     {
         let anchor = pos.max(BlockPos::ORIGIN);
-        let size = layout.size_with(ctx) - pos.abs();
+        let size = (signed(layout.size_with(ctx)) - pos.abs()).max(BlockPos::ORIGIN);
 
         Self {
             layout,
             anchor,
-            size,
+            size: size_of(size),
         }
     }
 }
@@ -570,7 +573,7 @@ impl<Ctx, L: Layout<Ctx>> Layout<Ctx> for Clipped<L> {
         self.layout.block_at_with(pos + self.anchor, ctx)
     }
 
-    fn size_with(&self, _ctx: &Ctx) -> BlockPos {
+    fn size_with(&self, _ctx: &Ctx) -> BlockSize {
         self.size
     }
 
@@ -608,8 +611,8 @@ mod tests {
             self.contains_with(pos, ctx).then(air)
         }
 
-        fn size_with(&self, _ctx: &()) -> BlockPos {
-            self.0
+        fn size_with(&self, _ctx: &()) -> BlockSize {
+            size_of(self.0)
         }
     }
 
@@ -648,15 +651,9 @@ mod tests {
     fn window_covers_every_item() {
         for &(sizes, pitch) in &CASES {
             let arranged = build(sizes, pitch);
-            let size = arranged.size();
-            for z in 0..size.z {
-                for y in 0..size.y {
-                    for x in 0..size.x {
-                        let pos = BlockPos::new(x, y, z);
-                        let hit = arranged.get_block(pos).is_some();
-                        assert_eq!(hit, covered(&arranged, pos), "{pos:?} at {pitch:?}");
-                    }
-                }
+            for pos in arranged.size().cartesian_positions() {
+                let hit = arranged.get_block(pos).is_some();
+                assert_eq!(hit, covered(&arranged, pos), "{pos:?} at {pitch:?}");
             }
         }
     }
@@ -672,8 +669,8 @@ mod tests {
             })
         }
 
-        fn size_with(&self, _ctx: &()) -> BlockPos {
-            self.0
+        fn size_with(&self, _ctx: &()) -> BlockSize {
+            size_of(self.0)
         }
     }
 
@@ -696,7 +693,7 @@ mod tests {
                 .map(|block| block.name)
         };
 
-        assert_eq!(arranged.size(), BlockPos::new(8, 1, 1));
+        assert_eq!(arranged.size(), BlockSize::new(8, 1, 1));
         assert_eq!(name(2), Some("minecraft:stone".into()));
         assert_eq!(name(3), Some("minecraft:dirt".into()));
         assert_eq!(name(4), Some("minecraft:dirt".into()));
@@ -710,7 +707,7 @@ mod tests {
         let items = [Solid(BlockPos::new(1, 3, 1)), Solid(BlockPos::new(1, 2, 1))];
         let arranged = Arranged::new(items, Axis::Elevation, -1, &());
 
-        assert_eq!(arranged.size(), BlockPos::new(1, 4, 1));
+        assert_eq!(arranged.size(), BlockSize::new(1, 4, 1));
         assert!(arranged.get_block(BlockPos::new(0, 0, 0)).is_some());
         assert!(arranged.get_block(BlockPos::new(0, 2, 0)).is_some());
         assert!(arranged.get_block(BlockPos::new(0, 3, 0)).is_some());
@@ -723,7 +720,7 @@ mod tests {
         let items = [Solid(BlockPos::new(1, 1, 3)), Solid(BlockPos::new(1, 1, 2))];
         let arranged = Arranged::new(items, Axis::Southing, -1, &());
 
-        assert_eq!(arranged.size(), BlockPos::new(1, 1, 4));
+        assert_eq!(arranged.size(), BlockSize::new(1, 1, 4));
         assert!(arranged.get_block(BlockPos::new(0, 0, 0)).is_some());
         assert!(arranged.get_block(BlockPos::new(0, 0, 2)).is_some());
         assert!(arranged.get_block(BlockPos::new(0, 0, 3)).is_some());
@@ -736,7 +733,7 @@ mod tests {
     fn reversed_gap_shifts_back_to_the_origin() {
         let arranged = arrange(&[(1, 1, 1); 2], -5);
 
-        assert_eq!(arranged.size(), BlockPos::new(5, 1, 1));
+        assert_eq!(arranged.size(), BlockSize::new(5, 1, 1));
         assert!(arranged.get_block(BlockPos::new(0, 0, 0)).is_some());
         assert!(arranged.get_block(BlockPos::new(1, 0, 0)).is_none());
         assert!(arranged.get_block(BlockPos::new(4, 0, 0)).is_some());
@@ -770,26 +767,19 @@ mod tests {
                 .map(|(&(x, _, _), &anchor)| anchor - first + x)
                 .max()
                 .unwrap_or(0);
-            assert_eq!(arranged.size().x, last, "{sizes:?} at {gap}");
+            assert_eq!(arranged.size().x, last as u32, "{sizes:?} at {gap}");
 
-            let size = arranged.size();
-            for z in 0..size.z {
-                for y in 0..size.y {
-                    for x in 0..size.x {
-                        let pos = BlockPos::new(x, y, z);
-                        let hit = sizes.iter().enumerate().any(|(i, &(sx, sy, sz))| {
-                            let start = anchors[i] - first;
-                            (start..start + sx).contains(&x)
-                                && (0..sy).contains(&y)
-                                && (0..sz).contains(&z)
-                        });
-                        assert_eq!(
-                            arranged.get_block(pos).is_some(),
-                            hit,
-                            "{pos:?} in {sizes:?} at {gap}"
-                        );
-                    }
-                }
+            for pos in arranged.size().cartesian_positions() {
+                let (x, y, z) = (pos.x, pos.y, pos.z);
+                let hit = sizes.iter().enumerate().any(|(i, &(sx, sy, sz))| {
+                    let start = anchors[i] - first;
+                    (start..start + sx).contains(&x) && (0..sy).contains(&y) && (0..sz).contains(&z)
+                });
+                assert_eq!(
+                    arranged.get_block(pos).is_some(),
+                    hit,
+                    "{pos:?} in {sizes:?} at {gap}"
+                );
             }
         }
     }
@@ -799,7 +789,7 @@ mod tests {
     fn empty_arrangement_has_no_size() {
         let arranged = Arranged::<Solid>::new([], Axis::Easting, -3, &());
 
-        assert_eq!(arranged.size(), BlockPos::ORIGIN);
+        assert_eq!(arranged.size(), BlockSize::new(0, 0, 0));
         assert!(arranged.get_block(BlockPos::ORIGIN).is_none());
     }
 
@@ -809,26 +799,20 @@ mod tests {
     fn window_reaches_highest_covering_item() {
         for &(sizes, pitch) in &CASES {
             let arranged = build(sizes, pitch);
-            let size = arranged.size();
             let mut needed = 0;
-            for z in 0..size.z {
-                for y in 0..size.y {
-                    for x in 0..size.x {
-                        let pos = BlockPos::new(x, y, z);
-                        let local = pos + arranged.anchor;
-                        let top = arranged.pitch.dot(local) - arranged.bias;
-                        let top = top
-                            .div_euclid(arranged.spacing)
-                            .min(arranged.items.len() as i32 - 1);
-                        let highest = (0..arranged.items.len()).rev().find(|&i| {
-                            arranged.items[i]
-                                .get_block(local - arranged.pitch * i as i32)
-                                .is_some()
-                        });
-                        if let Some(highest) = highest {
-                            needed = needed.max(top - highest as i32);
-                        }
-                    }
+            for pos in arranged.size().cartesian_positions() {
+                let local = pos + arranged.anchor;
+                let top = arranged.pitch.dot(local) - arranged.bias;
+                let top = top
+                    .div_euclid(arranged.spacing)
+                    .min(arranged.items.len() as i32 - 1);
+                let highest = (0..arranged.items.len()).rev().find(|&i| {
+                    arranged.items[i]
+                        .get_block(local - arranged.pitch * i as i32)
+                        .is_some()
+                });
+                if let Some(highest) = highest {
+                    needed = needed.max(top - highest as i32);
                 }
             }
             assert!(
@@ -859,7 +843,7 @@ mod tests {
         ];
         let arranged = Sequenced::new(items, Wide(2), &());
 
-        assert_eq!(arranged.size(), BlockPos::new(3, 1, 1));
+        assert_eq!(arranged.size(), BlockSize::new(3, 1, 1));
         for x in 0..3 {
             assert!(arranged.get_block(BlockPos::new(x, 0, 0)).is_some(), "{x}");
         }
@@ -875,7 +859,7 @@ mod tests {
         ];
         let arranged = Sequenced::new(items, Wide(2), &());
 
-        assert_eq!(arranged.size(), BlockPos::new(10, 1, 1));
+        assert_eq!(arranged.size(), BlockSize::new(10, 1, 1));
         for x in [0, 4, 8, 9] {
             assert!(arranged.get_block(BlockPos::new(x, 0, 0)).is_some(), "{x}");
         }

@@ -3,7 +3,7 @@
 use super::blocks::{Facing, WireConn, chain_block, inst_block, note_block, repeater, wire_state};
 use super::compose::EvenlyArranged;
 use super::{Layout, air};
-use crate::{BlockPos, BlockState, forward_layout};
+use crate::{BlockPos, BlockSize, BlockState, forward_layout};
 use rsnbs::note::Tone;
 use rsnbs::types::{Tick, TimeAnchor};
 use std::collections::HashSet;
@@ -159,8 +159,8 @@ impl<Ctx> Layout<Ctx> for Template {
         main(pos.y).or_else(|| branch(pos.y))
     }
 
-    fn size_with(&self, _ctx: &Ctx) -> BlockPos {
-        BlockPos::new(8, 2, 3)
+    fn size_with(&self, _ctx: &Ctx) -> BlockSize {
+        BlockSize::new(8, 2, 3)
     }
 
     /// The blocks a cell can draw: the spine and clock pass-through, one rib per

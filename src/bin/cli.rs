@@ -1,6 +1,5 @@
 use clap::Parser;
 use itertools::Either;
-use nbs_fractal::BlockPos;
 use nbs_fractal::analysis::reuse::{plan_to_tecs, reuse_flow};
 use nbs_fractal::analysis::{BoundedTec, TePlane, TransEqClass};
 use nbs_fractal::layout::Metadata;
@@ -514,7 +513,6 @@ impl Tapped {
             self.full_floor,
             !self.no_balance,
         );
-        let volume = |size: BlockPos| size.x as u64 * size.y as u64 * size.z as u64;
         let whole = layout.size();
         println!(
             "# {}: build={}x{}x{} volume={}",
@@ -522,7 +520,7 @@ impl Tapped {
             whole.x,
             whole.y,
             whole.z,
-            volume(whole)
+            whole.volume()
         );
         for (index, tec) in tecs.iter().enumerate() {
             let alone = TappedLayout::new(
@@ -540,7 +538,7 @@ impl Tapped {
                 size.x,
                 size.y,
                 size.z,
-                volume(size)
+                size.volume()
             );
         }
         let description = format!("Tapped from {}", self.input);

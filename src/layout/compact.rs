@@ -3,8 +3,8 @@
 use super::bamboo::{Events, Joint, State};
 use super::blocks::{Facing, WireConn, chain_block, inst_block, note_block, repeater, wire_state};
 use super::compose::{Clipped, EvenlyArranged, Overlaid, Provided, WithFloor};
-use super::{Layout, air};
-use crate::{BlockPos, BlockState, RedStoneTick, forward_layout};
+use super::{Layout, air, counts, size_of};
+use crate::{BlockPos, BlockSize, BlockState, RedStoneTick, forward_layout};
 use rsnbs::note::Tone;
 use std::collections::HashSet;
 use std::iter;
@@ -180,7 +180,7 @@ impl RawRow {
         let rest = EvenlyArranged::new(joints, BlockPos::new(0, 0, pitch), &frame);
         let turn_at = BlockPos::new(0, 0, if south_bound { 0 } else { -1 });
         let joints_at = BlockPos::new(-1, 0, if south_bound { 1 } else { -2 });
-        let row = Overlaid::new(turn_at, turn, joints_at, rest, size, &frame);
+        let row = Overlaid::new(turn_at, turn, joints_at, rest, size_of(size), &frame);
         Row(Provided::new(frame, row))
     }
 }
@@ -331,8 +331,8 @@ impl Layout<Frame> for Turn {
         }
     }
 
-    fn size_with(&self, frame: &Frame) -> BlockPos {
-        BlockPos::new(frame.width, 3, 1)
+    fn size_with(&self, frame: &Frame) -> BlockSize {
+        counts(frame.width, 3, 1)
     }
 
     /// The blocks a turn can draw: its stem repeater, the wire it rides on, and
@@ -366,7 +366,7 @@ impl Layout<Frame> for Joint {
         Layout::block_at_with(self, pos, &frame.south_bound)
     }
 
-    fn size_with(&self, frame: &Frame) -> BlockPos {
+    fn size_with(&self, frame: &Frame) -> BlockSize {
         Layout::size_with(self, &frame.south_bound)
     }
 

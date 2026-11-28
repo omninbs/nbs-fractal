@@ -5,7 +5,8 @@ use super::blocks::{redstone_torch, repeater, wire_state};
 use super::compact::{CompactLayout, RawCompact};
 use super::compose::{Arranged, EdgeArranged, Overlaid, WithFloor};
 use super::{Axis, Layout, LayoutExt};
-use crate::{BlockPos, BlockState, RedStoneTick, analysis::BoundedTec};
+use super::{counts, signed, size_of};
+use crate::{BlockPos, BlockSize, BlockState, RedStoneTick, analysis::BoundedTec};
 use rsnbs::note::{Instrument, Key, Tone};
 use std::collections::HashSet;
 use std::num::NonZero;
@@ -20,7 +21,12 @@ use std::num::NonZero;
 pub struct TappedLayout {
     control: EdgeArranged<TapLine>,
     playing: Arranged<WithFloor<CompactLayout>>,
-    size: BlockPos,
+    /// The control box's signed extent: its width splits a position between the
+    /// two units, and it bounds the control side.
+    control_size: BlockPos,
+    /// The playing box's signed extent, bounding the playing side.
+    playing_size: BlockPos,
+    size: BlockSize,
 }
 
 impl TappedLayout {
@@ -85,30 +91,32 @@ impl TappedLayout {
         let playing = Arranged::new(layouts, Axis::Elevation, 0, &());
 
         // composite bounding box
-        let ctrl_size = control.size();
-        let play_size = playing.size();
+        let control_size = signed(control.size());
+        let playing_size = signed(playing.size());
         let size = BlockPos::new(
-            ctrl_size.x + play_size.x,
-            ctrl_size.y.max(play_size.y),
-            ctrl_size.z.max(play_size.z),
+            control_size.x + playing_size.x,
+            control_size.y.max(playing_size.y),
+            control_size.z.max(playing_size.z),
         );
 
         Self {
             control,
             playing,
-            size,
+            control_size,
+            playing_size,
+            size: size_of(size),
         }
     }
 }
 
 impl Layout<()> for TappedLayout {
     fn block_at_with(&self, pos: BlockPos, _ctx: &()) -> Option<BlockState> {
-        let divide = self.control.size().x;
-        let side = pos.x < divide;
+        let control = self.control_size;
+        let side = pos.x < control.x;
 
         let (local, size) = match side {
-            true => (pos, self.control.size()),
-            false => (pos - BlockPos::new(divide, 0, 0), self.playing.size()),
+            true => (pos, control),
+            false => (pos - BlockPos::new(control.x, 0, 0), self.playing_size),
         };
         let dispatch = || match side {
             true => self.control.block_at(local),
@@ -117,7 +125,7 @@ impl Layout<()> for TappedLayout {
         (local.y < size.y && local.z < size.z).then(dispatch)?
     }
 
-    fn size_with(&self, _ctx: &()) -> BlockPos {
+    fn size_with(&self, _ctx: &()) -> BlockSize {
         self.size
     }
 
@@ -138,7 +146,7 @@ pub struct TapLine {
     delays: EdgeArranged<Tap>,
     anchor: BlockPos,
     switch: bool,
-    size: BlockPos,
+    size: BlockSize,
 }
 
 impl TapLine {
@@ -158,7 +166,7 @@ impl TapLine {
         }
 
         let delays = EdgeArranged::new(taps, Axis::Southing, 0, Axis::Easting.unit(), &());
-        let inner = delays.size();
+        let inner = signed(delays.size());
         let width = inner.x.max(if switch { 5 } else { 2 });
 
         // an empty line still keeps the port's height
@@ -168,14 +176,14 @@ impl TapLine {
         Self {
             anchor,
             switch,
-            size,
+            size: size_of(size),
             delays,
         }
     }
 
     fn port(&self, pos: BlockPos) -> Option<BlockState> {
         use WireConn::*;
-        let local_easting = self.size.x - pos.x - 1;
+        let local_easting = signed(self.size).x - pos.x - 1;
         let local_elevation = pos.y;
         let port_wire = || {
             let switch_south = if self.switch { Idle } else { Side };
@@ -212,7 +220,7 @@ impl Layout<()> for TapLine {
         }
     }
 
-    fn size_with(&self, _ctx: &()) -> BlockPos {
+    fn size_with(&self, _ctx: &()) -> BlockSize {
         self.size
     }
 
@@ -297,14 +305,14 @@ impl Tap {
 
         // chain
         let chain = Chain::new(delay.get() - taken);
-        let (chain_size, bus_size) = (chain.size(), bus.size());
+        let (chain_size, bus_size) = (signed(chain.size()), signed(bus.size()));
         let size = BlockPos::new(
             chain_size.x + bus_size.x,
             chain_size.y.max(bus_size.y),
             chain_size.z.max(bus_size.z),
         );
         let anchor = BlockPos::new(chain_size.x, 0, 0);
-        let inner = Overlaid::new(BlockPos::ORIGIN, chain, anchor, bus, size, &());
+        let inner = Overlaid::new(BlockPos::ORIGIN, chain, anchor, bus, size_of(size), &());
         Self { inner }
     }
 
@@ -319,7 +327,7 @@ impl Layout<()> for Tap {
         self.inner.block_at_with(pos, ctx)
     }
 
-    fn size_with(&self, ctx: &()) -> BlockPos {
+    fn size_with(&self, ctx: &()) -> BlockSize {
         self.inner.size_with(ctx)
     }
 
@@ -370,8 +378,8 @@ impl Layout<()> for Bus {
         }
     }
 
-    fn size_with(&self, _ctx: &()) -> BlockPos {
-        BlockPos::new(1, 4, 2)
+    fn size_with(&self, _ctx: &()) -> BlockSize {
+        BlockSize::new(1, 4, 2)
     }
 
     /// Both lane states.
@@ -432,8 +440,8 @@ impl Layout<()> for Chain {
         }
     }
 
-    fn size_with(&self, _ctx: &()) -> BlockPos {
-        BlockPos::new(self.columns(), 4, 2)
+    fn size_with(&self, _ctx: &()) -> BlockSize {
+        counts(self.columns(), 4, 2)
     }
 
     /// Every state the run draws.

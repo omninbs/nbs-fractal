@@ -3,7 +3,7 @@
 use super::Layout;
 use super::bamboo::Joint;
 use super::blocks::{Facing, WireConn, chain_block, redstone_torch, repeater, wire_state};
-use crate::{BlockPos, BlockState, RedStoneTick};
+use crate::{BlockPos, BlockSize, BlockState, RedStoneTick};
 use rsnbs::note::Tone;
 use rsnbs::types::TimeAnchor;
 
@@ -38,7 +38,7 @@ impl Layout<()> for CopperLayout {
         todo!()
     }
 
-    fn size_with(&self, _ctx: &()) -> BlockPos {
+    fn size_with(&self, _ctx: &()) -> BlockSize {
         todo!()
     }
 }
@@ -159,8 +159,8 @@ impl<Ctx> Layout<Ctx> for Controller {
         }
     }
 
-    fn size_with(&self, _ctx: &Ctx) -> BlockPos {
-        BlockPos::new(19, 3, 3)
+    fn size_with(&self, _ctx: &Ctx) -> BlockSize {
+        BlockSize::new(19, 3, 3)
     }
 }
 
@@ -194,8 +194,8 @@ impl Layout<()> for ClkHead {
         }
     }
 
-    fn size_with(&self, _ctx: &()) -> BlockPos {
-        BlockPos::new(3, 2, 2)
+    fn size_with(&self, _ctx: &()) -> BlockSize {
+        BlockSize::new(3, 2, 2)
     }
 }
 
@@ -222,8 +222,8 @@ impl Layout<()> for BulbHead {
         }
     }
 
-    fn size_with(&self, _ctx: &()) -> BlockPos {
-        BlockPos::new(3, 2, 2)
+    fn size_with(&self, _ctx: &()) -> BlockSize {
+        BlockSize::new(3, 2, 2)
     }
 }
 
@@ -262,8 +262,8 @@ impl Layout<()> for SynthHead {
         }
     }
 
-    fn size_with(&self, _ctx: &()) -> BlockPos {
-        BlockPos::new(7, 2, 2)
+    fn size_with(&self, _ctx: &()) -> BlockSize {
+        BlockSize::new(7, 2, 2)
     }
 }
 

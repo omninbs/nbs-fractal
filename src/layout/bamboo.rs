@@ -8,7 +8,7 @@
 
 use super::blocks::{Facing, WireConn, chain_block, inst_block, note_block, repeater, wire_state};
 use super::{Layout, air};
-use crate::{BlockPos, BlockState, RedStoneTick};
+use crate::{BlockPos, BlockSize, BlockState, RedStoneTick};
 use rsnbs::note::Tone;
 use std::collections::HashSet;
 use std::iter::{self, Peekable};
@@ -322,8 +322,8 @@ impl Layout<bool> for Joint {
         }
     }
 
-    fn size_with(&self, _ctx: &bool) -> BlockPos {
-        BlockPos::new(3, 3, 2)
+    fn size_with(&self, _ctx: &bool) -> BlockSize {
+        BlockSize::new(3, 3, 2)
     }
 
     /// The blocks a joint can draw: its chain stem, the repeater or bare wire its

@@ -12,14 +12,13 @@ pub mod torrent;
 pub use base::{Axis, Layout, LayoutExt, Mask};
 pub use litematic::Metadata;
 
-pub(crate) use base::air;
+pub(crate) use base::{air, counts, signed, size_of};
 
 mod base {
     //! The layout query traits and the primitives they are read with.
 
     use super::litematic::{Metadata, write};
-    use crate::{BlockPos, BlockState};
-    use itertools::iproduct;
+    use crate::{BlockPos, BlockSize, BlockState};
     use std::collections::HashSet;
     use std::io::{self, Write};
 
@@ -42,8 +41,11 @@ mod base {
         /// Block at the given world position, read within `ctx`, assumed in bounds.
         fn block_at_with(&self, pos: BlockPos, ctx: &Ctx) -> Option<BlockState>;
 
-        /// Total size of the bounding box, read within `ctx`.
-        fn size_with(&self, ctx: &Ctx) -> BlockPos;
+        /// Extent of the bounding box, read within `ctx`.
+        ///
+        /// A cell count, never a coordinate: no axis can be negative, and the
+        /// origin is the near corner.
+        fn size_with(&self, ctx: &Ctx) -> BlockSize;
 
         /// Block at the given world position; `None` when it misses the bounding box.
         fn get_block_with(&self, pos: BlockPos, ctx: &Ctx) -> Option<BlockState> {
@@ -60,10 +62,7 @@ mod base {
 
         /// Whether `pos` is inside the bounding box.
         fn contains_with(&self, pos: BlockPos, ctx: &Ctx) -> bool {
-            let size = self.size_with(ctx);
-            (0..size.x).contains(&pos.x)
-                && (0..size.y).contains(&pos.y)
-                && (0..size.z).contains(&pos.z)
+            self.size_with(ctx).contains(pos)
         }
 
         /// The block states this instance owns: a set containing every state that
@@ -75,13 +74,11 @@ mod base {
         /// [`get_block_or_air_with`](Self::get_block_or_air_with). The writer alone
         /// fixes the id order, so the set need not be ordered.
         fn block_palette_with(&self, ctx: &Ctx) -> HashSet<BlockState> {
-            let size = self.size_with(ctx);
-            let at = |(y, z, x)| self.get_block_or_air_with(BlockPos::new(x, y, z), ctx);
             // Insert one by one: `collect` would reserve the box's whole volume
             // from the iterator's size hint, however few blocks it ends up holding.
             let mut palette = HashSet::new();
-            for block in iproduct!(0..size.y, 0..size.z, 0..size.x).map(at) {
-                palette.insert(block);
+            for pos in self.size_with(ctx).cartesian_positions() {
+                palette.insert(self.get_block_or_air_with(pos, ctx));
             }
             palette
         }
@@ -100,8 +97,8 @@ mod base {
             self.block_at_with(pos, &())
         }
 
-        /// Total size of the bounding box.
-        fn size(&self) -> BlockPos {
+        /// Extent of the bounding box.
+        fn size(&self) -> BlockSize {
             self.size_with(&())
         }
 
@@ -142,8 +139,8 @@ mod base {
             None
         }
 
-        fn size_with(&self, _ctx: &Ctx) -> BlockPos {
-            BlockPos::ORIGIN
+        fn size_with(&self, _ctx: &Ctx) -> BlockSize {
+            BlockSize::new(0, 0, 0)
         }
     }
 
@@ -152,7 +149,7 @@ mod base {
             self.as_ref().block_at_with(pos, ctx)
         }
 
-        fn size_with(&self, ctx: &Ctx) -> BlockPos {
+        fn size_with(&self, ctx: &Ctx) -> BlockSize {
             self.as_ref().size_with(ctx)
         }
 
@@ -187,7 +184,7 @@ mod base {
                     self.$field.block_at_with(pos, ctx)
                 }
 
-                fn size_with(&self, ctx: &$ctx) -> $crate::BlockPos {
+                fn size_with(&self, ctx: &$ctx) -> $crate::BlockSize {
                     self.$field.size_with(ctx)
                 }
 
@@ -281,6 +278,29 @@ mod base {
     //
     // ++++++++++++============++++++++++++============++++++++++++============
 
+    /// A box extent from the counts a layout reports.
+    ///
+    /// A span has no direction, so a negative count means the layout mis-measured
+    /// itself; that is reported rather than folded into a positive count.
+    pub(crate) fn counts(x: i32, y: i32, z: i32) -> BlockSize {
+        let axis = |value: i32| u32::try_from(value).expect("layout size must not be negative");
+        BlockSize::new(axis(x), axis(y), axis(z))
+    }
+
+    /// A box extent from the signed size a layout computes.
+    pub(crate) fn size_of(span: BlockPos) -> BlockSize {
+        counts(span.x, span.y, span.z)
+    }
+
+    /// The signed view of a span, for geometry that offsets a position by it.
+    ///
+    /// A layout never spans more cells than a [`BlockPos`] can name, so a span
+    /// that does not fit is a bug rather than a runtime condition.
+    pub(crate) fn signed(size: BlockSize) -> BlockPos {
+        size.to_declared()
+            .expect("layout size exceeds what a BlockPos can name")
+    }
+
     pub(crate) fn air() -> BlockState {
         BlockState::AIR
     }
@@ -290,8 +310,7 @@ mod litematic {
     //! Projection output: metadata and the adapter to the litematica writer.
 
     use super::base::{Layout, LayoutExt};
-    use crate::{BlockPos, BlockState};
-    use litematica::knowledge::mc::BlockSize;
+    use crate::{BlockPos, BlockSize, BlockState};
     use litematica::task::writer::{self, WriteOptions};
     use std::collections::HashSet;
     use std::io::{self, Write};
@@ -329,16 +348,16 @@ mod litematic {
 
     /// Adapts this crate's [`Layout`] to the [`litematica`] writer's trait.
     ///
-    /// The adapter is a newtype so the conversion stays explicit: a span gains a
-    /// non-negative [`BlockSize`], while the block and palette queries pass
-    /// through unchanged.
+    /// The blocks and the span pass through unchanged: both sides already speak
+    /// [`BlockSize`] for a span and [`BlockPos`] for a coordinate. The wrapper
+    /// itself is needed for coherence, the writer's trait being foreign.
     struct Adapted<'a, L> {
         layout: &'a L,
     }
 
     impl<L: Layout> writer::Layout for Adapted<'_, L> {
         fn size(&self) -> BlockSize {
-            BlockSize::of(self.layout.size())
+            self.layout.size()
         }
 
         fn position(&self) -> BlockPos {

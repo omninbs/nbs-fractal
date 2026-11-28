@@ -3,8 +3,8 @@
 use super::blocks::{Facing, WireConn, chain_block, inst_block, note_block, repeater};
 use super::blocks::{redstone_block, sticky_piston, wire_state};
 use super::compose::{Clipped, EvenlyArranged, Overlaid, Provided, WithFloor};
-use super::{Layout, air};
-use crate::{BlockPos, BlockState, forward_layout};
+use super::{Layout, air, counts, signed, size_of};
+use crate::{BlockPos, BlockSize, BlockState, forward_layout};
 use rsnbs::note::Tone;
 use rsnbs::types::{Tick, TimeAnchor};
 use std::{collections::HashSet, iter::from_fn, num::NonZero, vec::IntoIter as VecIter};
@@ -161,10 +161,17 @@ impl Row {
         };
         let cells = EvenlyArranged::new(templates, pitch, &frame);
         let turn = Turn::new(leading_turn);
-        let size = BlockPos::new(width, cells.size_with(&frame).y, depth);
+        let size = BlockPos::new(width, signed(cells.size_with(&frame)).y, depth);
         let turn_anchor = BlockPos::new(0, 0, if south_bound { 0 } else { -1 });
         let cells_anchor = BlockPos::new(-1, 0, if south_bound { 1 } else { -2 });
-        let inner = Overlaid::new(turn_anchor, turn, cells_anchor, cells, size, &frame);
+        let inner = Overlaid::new(
+            turn_anchor,
+            turn,
+            cells_anchor,
+            cells,
+            size_of(size),
+            &frame,
+        );
         Self(Provided::new(frame, inner))
     }
 }
@@ -419,8 +426,8 @@ impl Layout<Frame> for Template {
         }
     }
 
-    fn size_with(&self, frame: &Frame) -> BlockPos {
-        BlockPos::new(frame.scale.width(), 2, 3)
+    fn size_with(&self, frame: &Frame) -> BlockSize {
+        counts(frame.scale.width(), 2, 3)
     }
 
     /// The blocks a cell can draw: its fixed circuit row, the branch hardware its
@@ -481,8 +488,8 @@ impl Layout<Frame> for Turn {
         }
     }
 
-    fn size_with(&self, frame: &Frame) -> BlockPos {
-        BlockPos::new(frame.width, 2, 1)
+    fn size_with(&self, frame: &Frame) -> BlockSize {
+        counts(frame.width, 2, 1)
     }
 
     /// The blocks a turn can draw: its connector wires and the chain it rides on.

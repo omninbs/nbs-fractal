@@ -3,7 +3,8 @@
 use super::blocks::{Facing, WireConn, chain_block, inst_block, note_block, repeater, wire_state};
 use super::compose::{EvenlyArranged, Overlaid};
 use super::{Layout, air};
-use crate::{BlockPos, BlockState, playable};
+use super::{signed, size_of};
+use crate::{BlockPos, BlockSize, BlockState, playable};
 use litematica::model::document::Document;
 use litematica::task::decompress::gzip_with_limit;
 use rsnbs::note::{Note, Tone};
@@ -99,12 +100,21 @@ impl TorrentLayout {
     {
         let (tracks, slices) = Self::fill(notes, tracks, omit_empty);
         let linkage = Linkage::new();
-        let anchor = BlockPos::new(0, 0, linkage.size_with(&tracks).z - 1);
+        let linkage_size = signed(linkage.size_with(&tracks));
+        let anchor = BlockPos::new(0, 0, linkage_size.z - 1);
         let slices = slices.into_iter().map(|slots| Template { slots });
         let slices = EvenlyArranged::new(slices, BlockPos::new(0, 0, 2), &tracks);
-        let span = linkage.size_with(&tracks).max(slices.size_with(&tracks));
-        let size = BlockPos::new(span.x, span.y, anchor.z + slices.size_with(&tracks).z);
-        let inner = Overlaid::new(BlockPos::ORIGIN, linkage, anchor, slices, size, &tracks);
+        let slices_size = signed(slices.size_with(&tracks));
+        let span = linkage_size.max(slices_size);
+        let size = BlockPos::new(span.x, span.y, anchor.z + slices_size.z);
+        let inner = Overlaid::new(
+            BlockPos::ORIGIN,
+            linkage,
+            anchor,
+            slices,
+            size_of(size),
+            &tracks,
+        );
         Self { tracks, inner }
     }
 
@@ -218,7 +228,7 @@ impl Layout<()> for TorrentLayout {
         self.inner.block_at_with(pos, &self.tracks)
     }
 
-    fn size_with(&self, _ctx: &()) -> BlockPos {
+    fn size_with(&self, _ctx: &()) -> BlockSize {
         self.inner.size_with(&self.tracks)
     }
 
@@ -269,10 +279,8 @@ impl<Ctx> Layout<Ctx> for Linkage {
         self.0.regions[0].state_at(pos).cloned()
     }
 
-    fn size_with(&self, _ctx: &Ctx) -> BlockPos {
-        let size = self.0.regions[0].size();
-        let axis = |value: u32| i32::try_from(value).expect("region size fits BlockPos");
-        BlockPos::new(axis(size.x), axis(size.y), axis(size.z))
+    fn size_with(&self, _ctx: &Ctx) -> BlockSize {
+        self.0.regions[0].size()
     }
 
     /// The embedded projection's own palette, read straight back out.
@@ -338,8 +346,8 @@ impl Layout<Vec<(i32, i32)>> for Template {
         }
     }
 
-    fn size_with(&self, _tracks: &Vec<(i32, i32)>) -> BlockPos {
-        BlockPos::new(99, 71, 2)
+    fn size_with(&self, _tracks: &Vec<(i32, i32)>) -> BlockSize {
+        BlockSize::new(99, 71, 2)
     }
 
     /// The blocks a slice can draw: the fixed circuit row plus one note and one

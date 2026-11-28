@@ -13,7 +13,7 @@ use rsnbs::note::{Instrument, Tone};
 
 pub mod analysis;
 pub mod layout;
-pub use litematica::knowledge::mc::{BlockPos, BlockState};
+pub use litematica::knowledge::mc::{BlockPos, BlockSize, BlockState};
 
 /// Redstone tick (10 t/s).
 pub type RedStoneTick = rsnbs::types::Tick;
