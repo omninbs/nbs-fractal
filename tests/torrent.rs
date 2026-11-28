@@ -31,7 +31,7 @@ fn placed(layout: &impl LayoutExt) -> Vec<BlockPos> {
     for z in 0..size.z {
         for y in 0..size.y {
             for x in 0..size.x {
-                let pos = BlockPos::new(x, y, z);
+                let pos = BlockPos::new(x as i32, y as i32, z as i32);
                 let hit = layout
                     .get_block(pos)
                     .is_some_and(|b| b.name == "minecraft:note_block");

@@ -2,7 +2,7 @@
 //! wrapper with it.
 
 use nbs_fractal::layout::{Layout, LayoutExt};
-use nbs_fractal::{BlockPos, BlockState, forward_layout};
+use nbs_fractal::{BlockPos, BlockSize, BlockState, forward_layout};
 
 /// A one-wide solid line, declared from outside the crate.
 struct Solid;
@@ -12,8 +12,8 @@ impl Layout<()> for Solid {
         (0..2).contains(&pos.x).then_some(BlockState::AIR)
     }
 
-    fn size_with(&self, _ctx: &()) -> BlockPos {
-        BlockPos::new(2, 1, 1)
+    fn size_with(&self, _ctx: &()) -> BlockSize {
+        BlockSize::new(2, 1, 1)
     }
 }
 
@@ -25,7 +25,7 @@ forward_layout!(Wrapper, ());
 #[test]
 fn forwards_through_the_exported_macro() {
     let wrapper = Wrapper(Solid);
-    assert_eq!(wrapper.size(), BlockPos::new(2, 1, 1));
+    assert_eq!(wrapper.size(), BlockSize::new(2, 1, 1));
     assert!(wrapper.get_block(BlockPos::new(1, 0, 0)).is_some());
     assert!(wrapper.get_block(BlockPos::new(2, 0, 0)).is_none());
 }

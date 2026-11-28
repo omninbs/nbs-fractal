@@ -4,7 +4,7 @@ use itertools::iproduct;
 use litematica::model::document::Document;
 use litematica::task::decompress::gzip_with_limit;
 use nbs_fractal::layout::{Layout, LayoutExt, Metadata};
-use nbs_fractal::{BlockPos, BlockState};
+use nbs_fractal::{BlockPos, BlockSize, BlockState};
 
 const NAME: &str = "Note Block Track Schematic";
 
@@ -22,7 +22,7 @@ fn block(name: &'static str, props: &[(&'static str, &'static str)]) -> BlockSta
 /// A tiny layout exercising note blocks, instruments, and circuit blocks.
 struct Sample;
 
-const SIZE: BlockPos = BlockPos::new(4, 3, 3);
+const SIZE: BlockSize = BlockSize::new(4, 3, 3);
 
 impl Layout<()> for Sample {
     fn block_at_with(&self, pos: BlockPos, _ctx: &()) -> Option<BlockState> {
@@ -42,7 +42,7 @@ impl Layout<()> for Sample {
         }
     }
 
-    fn size_with(&self, _ctx: &()) -> BlockPos {
+    fn size_with(&self, _ctx: &()) -> BlockSize {
         SIZE
     }
 }
@@ -84,7 +84,7 @@ fn cells(bytes: &[u8]) -> Vec<BlockState> {
 fn round_trips_through_litematica() {
     let layout = Sample;
     let expected: Vec<BlockState> = iproduct!(0..SIZE.y, 0..SIZE.z, 0..SIZE.x)
-        .map(|(y, z, x)| layout.get_block_or_air(BlockPos::new(x, y, z)))
+        .map(|(y, z, x)| layout.get_block_or_air(BlockPos::new(x as i32, y as i32, z as i32)))
         .collect();
     assert_eq!(cells(&written(&layout)), expected);
 }
