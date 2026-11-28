@@ -185,114 +185,75 @@ impl<Ctx, L: Layout<Ctx>> Layout<Ctx> for EdgeArranged<L> {
     }
 }
 
-// LatticeArranged
+// Sequenced
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-/// Names the two maps that place items: `forward` gives item `i`'s anchor and
-/// `inverse` gives the last item whose anchor has not passed a position, the
-/// two inverting each other.
+/// The spatial address scheme of a sequence of sub-layouts: given a position, it
+/// yields the indices of the entries that may cover it, highest priority first.
 ///
-/// A named implementation is what lets a composite type spell the field it
-/// stores, while a closure pair is what lets an ad-hoc arrangement stay
-/// anonymous.
-pub trait Lattice {
-    /// Anchor of item `i`.
-    fn forward(&self, i: usize) -> BlockPos;
-
-    /// Last item whose anchor does not pass `pos`.
-    fn inverse(&self, pos: BlockPos) -> usize;
+/// Equal spacing, growing steps and grids are all just different schemes, so the
+/// container below depends on nothing else. The indices must be in range for the
+/// items the container was given.
+pub trait Sequence {
+    /// Indices that may cover `pos`, highest priority first.
+    fn candidates(&self, pos: BlockPos) -> impl IntoIterator<Item = usize>;
 }
 
-/// Any pair of closures of the right shapes is a lattice.
-impl<F, G> Lattice for (F, G)
-where
-    F: Fn(usize) -> BlockPos,
-    G: Fn(BlockPos) -> usize,
-{
-    fn forward(&self, i: usize) -> BlockPos {
-        (self.0)(i)
-    }
-
-    fn inverse(&self, pos: BlockPos) -> usize {
-        (self.1)(pos)
-    }
-}
-
-/// Arranges sub-layouts at the anchors a [`Lattice`] names.
+/// Places each sub-layout at the anchor given with it, in the order its
+/// [`Sequence`] yields them.
 ///
-/// Query cost is O(k) with `k` the candidate window width, independent of the
-/// item count: the window top is one `inverse` call, the measured span covers
-/// the rest, and no search over anchors happens at query time. Anchors need not
-/// be evenly spaced, so the lattice may describe any non-decreasing progression,
-/// including one whose steps grow. They may also lie at negative coordinates;
-/// the box shifts to the origin.
-pub struct LatticeArranged<L, K> {
-    /// Sub-layouts in anchor order; item `i` sits at `lattice.forward(i)`.
-    items: Vec<L>,
-    /// The anchors, as maps rather than as a list.
-    lattice: K,
-    /// Least window width that still reaches the highest covering item.
-    span: usize,
-    /// Shift making the least anchor the box origin.
+/// Anchors live in anchor space and may be negative; the box shifts so the least
+/// anchor sits at the origin and spans the least size containing every anchored
+/// item, and the sequence is asked in that same anchor space. Query cost is O(k)
+/// with `k` the candidates a position yields, independent of the item count.
+pub struct Sequenced<L, K> {
+    /// Sub-layouts with the anchor each is placed at.
+    items: Vec<(BlockPos, L)>,
+    /// The spatial address scheme over those items.
+    sequence: K,
+    /// Anchor-space shift: added to a box position before the sequence is asked.
     origin: BlockPos,
     /// Bounding box size, zero when empty.
     size: BlockPos,
 }
 
-impl<L, K: Lattice> LatticeArranged<L, K> {
-    /// Arranges `items` at the anchors `lattice` names.
-    pub fn new<Ctx, I>(items: I, lattice: K, ctx: &Ctx) -> Self
+impl<L, K> Sequenced<L, K> {
+    /// Places `items` at their anchors, as `sequence` addresses them, over the
+    /// least box containing every anchored item as `ctx` measures them.
+    pub fn new<Ctx, I>(items: I, sequence: K, ctx: &Ctx) -> Self
     where
-        I: IntoIterator<Item = L>,
+        I: IntoIterator<Item = (BlockPos, L)>,
         L: Layout<Ctx>,
     {
         let items = Vec::from_iter(items);
-        let inner: Vec<BlockPos> = items
+        let (origin, far) = items
             .iter()
-            .map(|item| (item.size_with(ctx) - BlockPos::UNIT).max(BlockPos::ORIGIN))
-            .collect();
-        let anchors: Vec<BlockPos> = (0..items.len()).map(|i| lattice.forward(i)).collect();
-        debug_assert!(
-            (0..items.len()).all(|i| lattice.inverse(anchors[i]) >= i),
-            "inverse must not run ahead of forward"
-        );
-
-        let origin = anchors
-            .iter()
-            .copied()
-            .fold(BlockPos::ORIGIN, BlockPos::min);
-        let size = (0..items.len())
-            .map(|i| anchors[i] + inner[i] + BlockPos::UNIT)
-            .fold(BlockPos::ORIGIN, BlockPos::max)
-            - origin;
-        let span = (0..items.len())
-            .map(|i| lattice.inverse(anchors[i] + inner[i]).saturating_sub(i))
-            .max()
-            .unwrap_or_default();
+            .map(|(anchor, item)| (*anchor, *anchor + item.size_with(ctx)))
+            .fold(
+                (BlockPos::ORIGIN, BlockPos::ORIGIN),
+                |(least, far), (a, end)| (least.min(a), far.max(end)),
+            );
         Self {
             items,
-            lattice,
-            span,
+            sequence,
             origin,
-            size,
+            size: far - origin,
         }
     }
 }
 
-impl<Ctx, L, K> Layout<Ctx> for LatticeArranged<L, K>
+impl<Ctx, L, K> Layout<Ctx> for Sequenced<L, K>
 where
     L: Layout<Ctx>,
-    K: Lattice,
+    K: Sequence,
 {
     fn block_at_with(&self, pos: BlockPos, ctx: &Ctx) -> Option<BlockState> {
-        let last = self.items.len().checked_sub(1)?;
         let world = pos + self.origin;
-        let top = self.lattice.inverse(world).min(last);
-        let bottom = top.saturating_sub(self.span);
-        (bottom..=top)
-            .rev()
-            .find_map(|i| self.items[i].get_block_with(world - self.lattice.forward(i), ctx))
+        self.sequence.candidates(world).into_iter().find_map(|i| {
+            let (anchor, item) = &self.items[i];
+            item.get_block_with(world - *anchor, ctx)
+        })
     }
 
     fn size_with(&self, _ctx: &Ctx) -> BlockPos {
@@ -302,7 +263,7 @@ where
     /// The union of every item's palette.
     fn block_palette_with(&self, ctx: &Ctx) -> HashSet<BlockState> {
         let mut palette = HashSet::new();
-        for item in &self.items {
+        for (_, item) in &self.items {
             palette.extend(item.block_palette_with(ctx));
         }
         palette
@@ -313,40 +274,32 @@ where
 //
 // ++++++++++++============++++++++++++============++++++++++++============
 
-/// The arithmetic lattice: item `i` sits at `i * pitch`.
+/// Evenly arranges sub-layouts along the direction of `pitch`: item `i` is
+/// anchored at `i * pitch`, a monotone linear lattice of equal spacing.
 ///
-/// The inverse is the closed form the lattice trait asks for, so an evenly
-/// spaced arrangement stays O(1) per lookup however long it grows.
-struct Pitch {
-    /// Non-zero step between anchors.
+/// Query cost is O(k) with `k` the candidate window width, independent of
+/// the item count. The window is the least that still reaches every item's
+/// covering cell, so `k` is minimal. `pitch` must be non-zero; an empty
+/// arrangement covers nothing and reports zero size.
+pub struct EvenlyArranged<L> {
+    /// Sub-layouts in lattice order; item `i` sits at `i * pitch`.
+    items: Vec<L>,
+    /// Non-zero step between item anchors.
     pitch: BlockPos,
+    /// Shift so indices can go negative: `min(pitch, 0) * (len - 1)`.
+    anchor: BlockPos,
     /// `pitch.dot(pitch)`, always positive.
     spacing: i32,
-    /// Negated reach of one item's box backwards along `pitch`, added before the
-    /// division so the inverse lands on the last item that may still cover a
-    /// position rather than one below it.
+    /// Least `pitch.dot(local_pos - i * pitch)` over the integer points of one
+    /// item box, so `top` never overshoots the highest covering item.
     bias: i32,
+    /// Least candidate window width minus one that still reaches the highest
+    /// covering item, `floor((L - M) / spacing)` with `L = |pitch|.extent` and
+    /// `M = |pitch|.ones`.
+    span: i32,
+    /// Bounding box size: `pitch.abs() * (len - 1) + extent`, zero when empty.
+    size: BlockPos,
 }
-
-impl Lattice for Pitch {
-    fn forward(&self, i: usize) -> BlockPos {
-        self.pitch * i as i32
-    }
-
-    fn inverse(&self, pos: BlockPos) -> usize {
-        (self.pitch.dot(pos) - self.bias)
-            .div_euclid(self.spacing)
-            .max(0) as usize
-    }
-}
-
-/// Evenly arranges sub-layouts along the direction of `pitch`: item `i` is
-/// anchored at `i * pitch`, an arithmetic progression of equal spacing.
-///
-/// A special case of [`LatticeArranged`], so the query cost is O(k) with `k` the
-/// candidate window width. `pitch` must be non-zero; an empty arrangement
-/// covers nothing and reports zero size.
-pub struct EvenlyArranged<L>(LatticeArranged<L, Pitch>);
 
 impl<L> EvenlyArranged<L> {
     /// Places item `i` at `i * pitch`, which must be non-zero.
@@ -361,27 +314,51 @@ impl<L> EvenlyArranged<L> {
             .iter()
             .map(|item| item.size_with(ctx))
             .fold(BlockPos::ORIGIN, BlockPos::max);
+        let far = (items.len() as i32 - 1).max(0);
+
         let inner = (extent - BlockPos::new(1, 1, 1)).max(BlockPos::ORIGIN);
-        let lattice = Pitch {
+        let fore = pitch.max(BlockPos::ORIGIN);
+        let back = (-pitch).max(BlockPos::ORIGIN);
+        let spacing = pitch.dot(pitch);
+
+        let ahead = fore.dot(inner);
+        let behind = back.dot(inner);
+        Self {
+            items,
             pitch,
-            spacing: pitch.dot(pitch),
-            bias: -(-pitch).max(BlockPos::ORIGIN).dot(inner),
-        };
-        Self(LatticeArranged::new(items, lattice, ctx))
+            anchor: -(back * far),
+            spacing,
+            bias: -behind,
+            span: (ahead + behind) / spacing,
+            size: pitch.abs() * far + extent,
+        }
     }
 }
 
 impl<Ctx, L: Layout<Ctx>> Layout<Ctx> for EvenlyArranged<L> {
     fn block_at_with(&self, pos: BlockPos, ctx: &Ctx) -> Option<BlockState> {
-        self.0.block_at_with(pos, ctx)
+        let local_pos = pos + self.anchor;
+        let offset = self.pitch.dot(local_pos);
+        let top = (offset - self.bias)
+            .div_euclid(self.spacing)
+            .min(self.items.len() as i32 - 1);
+        let bottom = (top - self.span).max(0);
+        (bottom..=top)
+            .rev()
+            .find_map(|i| self.items[i as usize].get_block_with(local_pos - self.pitch * i, ctx))
     }
 
-    fn size_with(&self, ctx: &Ctx) -> BlockPos {
-        self.0.size_with(ctx)
+    fn size_with(&self, _ctx: &Ctx) -> BlockPos {
+        self.size
     }
 
+    /// The union of every item's palette.
     fn block_palette_with(&self, ctx: &Ctx) -> HashSet<BlockState> {
-        self.0.block_palette_with(ctx)
+        let mut palette = HashSet::new();
+        for item in &self.items {
+            palette.extend(item.block_palette_with(ctx));
+        }
+        palette
     }
 }
 
@@ -641,30 +618,19 @@ mod tests {
         EvenlyArranged::new(items, BlockPos::new(pitch.0, pitch.1, pitch.2), &())
     }
 
-    /// The origin `LatticeArranged` shifts a lattice by: the least anchor.
-    fn origin(sizes: &[(i32, i32, i32)], pitch: BlockPos) -> BlockPos {
-        let far = (sizes.len() as i32 - 1).max(0);
-        pitch.min(BlockPos::ORIGIN) * far
-    }
-
-    /// Whether item `i` covers `local`, a point already shifted into the lattice.
-    fn hits(sizes: &[(i32, i32, i32)], i: usize, local: BlockPos) -> bool {
-        let (x, y, z) = sizes[i];
-        (0..x).contains(&local.x) && (0..y).contains(&local.y) && (0..z).contains(&local.z)
-    }
-
-    /// The loose box the old size formula reported: `|pitch| * far + extent`.
-    fn loose(sizes: &[(i32, i32, i32)], pitch: BlockPos) -> BlockPos {
-        let far = (sizes.len() as i32 - 1).max(0);
-        let extent = sizes.iter().fold(BlockPos::ORIGIN, |acc, &(x, y, z)| {
-            acc.max(BlockPos::new(x, y, z))
-        });
-        pitch.abs() * far + extent
+    /// Whether any item covers `pos`, by scanning the whole lattice.
+    fn covered(arranged: &EvenlyArranged<Solid>, pos: BlockPos) -> bool {
+        let local = pos + arranged.anchor;
+        arranged
+            .items
+            .iter()
+            .enumerate()
+            .any(|(i, item)| item.get_block(local - arranged.pitch * i as i32).is_some())
     }
 
     /// Pitch and item sizes sweeping positive, negative, mixed and overlapping
     /// lattices.
-    const CASES: [(&[(i32, i32, i32)], (i32, i32, i32)); 8] = [
+    const CASES: [(&[(i32, i32, i32)], (i32, i32, i32)); 10] = [
         (&[(5, 1, 1); 4], (2, 0, 0)),
         (&[(5, 1, 1); 4], (-2, 0, 0)),
         (&[(5, 5, 1); 4], (1, 1, 0)),
@@ -673,30 +639,168 @@ mod tests {
         (&[(2, 6, 2); 4], (0, 4, 0)),
         (&[(5, 1, 1), (3, 1, 1), (7, 1, 1), (2, 1, 1)], (3, 0, 0)),
         (&[(4, 4, 3); 4], (2, 3, -1)),
+        (&[(4, 4, 3); 4], (-2, -3, 1)),
+        (&[(2, 5, 2); 4], (-1, -1, 2)),
     ];
 
-    /// Every cell any item covers is found, so the window never misses. The box
-    /// swept is the loose one, so a cell left outside the reported size would
-    /// still be caught here.
+    /// Every cell any item covers is found, so the window never misses.
     #[test]
     fn window_covers_every_item() {
         for &(sizes, pitch) in &CASES {
             let arranged = build(sizes, pitch);
-            let pitch = BlockPos::new(pitch.0, pitch.1, pitch.2);
-            let size = loose(sizes, pitch);
+            let size = arranged.size();
             for z in 0..size.z {
                 for y in 0..size.y {
                     for x in 0..size.x {
                         let pos = BlockPos::new(x, y, z);
-                        let local = pos + origin(sizes, pitch);
-                        let covered =
-                            (0..sizes.len()).any(|i| hits(sizes, i, local - pitch * i as i32));
                         let hit = arranged.get_block(pos).is_some();
-                        assert_eq!(hit, covered, "{pos:?} at {pitch:?}");
+                        assert_eq!(hit, covered(&arranged, pos), "{pos:?} at {pitch:?}");
                     }
                 }
             }
         }
+    }
+
+    /// A solid cuboid drawing a block under a chosen name.
+    struct Named(BlockPos, &'static str);
+
+    impl Layout<()> for Named {
+        fn block_at_with(&self, pos: BlockPos, ctx: &()) -> Option<BlockState> {
+            self.contains_with(pos, ctx).then(|| BlockState {
+                name: self.1.into(),
+                properties: Default::default(),
+            })
+        }
+
+        fn size_with(&self, _ctx: &()) -> BlockPos {
+            self.0
+        }
+    }
+
+    fn arrange(sizes: &[(i32, i32, i32)], gap: i32) -> Arranged<Solid> {
+        let items = sizes.iter().map(|&(x, y, z)| Solid(BlockPos::new(x, y, z)));
+        Arranged::new(items, Axis::Easting, gap, &())
+    }
+
+    /// A negative gap overlaps adjacent items, and the later one wins.
+    #[test]
+    fn negative_gap_layers_later_items_on_top() {
+        let items = [
+            Named(BlockPos::new(5, 1, 1), "minecraft:stone"),
+            Named(BlockPos::new(5, 1, 1), "minecraft:dirt"),
+        ];
+        let arranged = Arranged::new(items, Axis::Easting, -2, &());
+        let name = |x| {
+            arranged
+                .get_block(BlockPos::new(x, 0, 0))
+                .map(|block| block.name)
+        };
+
+        assert_eq!(arranged.size(), BlockPos::new(8, 1, 1));
+        assert_eq!(name(2), Some("minecraft:stone".into()));
+        assert_eq!(name(3), Some("minecraft:dirt".into()));
+        assert_eq!(name(4), Some("minecraft:dirt".into()));
+        assert_eq!(name(7), Some("minecraft:dirt".into()));
+        assert_eq!(name(8), None);
+    }
+
+    /// A signed gap works on any arrangement axis, not just easting.
+    #[test]
+    fn signed_gap_arranges_vertically() {
+        let items = [Solid(BlockPos::new(1, 3, 1)), Solid(BlockPos::new(1, 2, 1))];
+        let arranged = Arranged::new(items, Axis::Elevation, -1, &());
+
+        assert_eq!(arranged.size(), BlockPos::new(1, 4, 1));
+        assert!(arranged.get_block(BlockPos::new(0, 0, 0)).is_some());
+        assert!(arranged.get_block(BlockPos::new(0, 2, 0)).is_some());
+        assert!(arranged.get_block(BlockPos::new(0, 3, 0)).is_some());
+        assert!(arranged.get_block(BlockPos::new(0, 4, 0)).is_none());
+    }
+
+    /// The southing axis mirrors easting on the z component.
+    #[test]
+    fn signed_gap_arranges_southwards() {
+        let items = [Solid(BlockPos::new(1, 1, 3)), Solid(BlockPos::new(1, 1, 2))];
+        let arranged = Arranged::new(items, Axis::Southing, -1, &());
+
+        assert_eq!(arranged.size(), BlockPos::new(1, 1, 4));
+        assert!(arranged.get_block(BlockPos::new(0, 0, 0)).is_some());
+        assert!(arranged.get_block(BlockPos::new(0, 0, 2)).is_some());
+        assert!(arranged.get_block(BlockPos::new(0, 0, 3)).is_some());
+        assert!(arranged.get_block(BlockPos::new(0, 0, 4)).is_none());
+    }
+
+    /// A gap more negative than the item extent reverses the anchors, and the
+    /// bounding box still starts at the origin.
+    #[test]
+    fn reversed_gap_shifts_back_to_the_origin() {
+        let arranged = arrange(&[(1, 1, 1); 2], -5);
+
+        assert_eq!(arranged.size(), BlockPos::new(5, 1, 1));
+        assert!(arranged.get_block(BlockPos::new(0, 0, 0)).is_some());
+        assert!(arranged.get_block(BlockPos::new(1, 0, 0)).is_none());
+        assert!(arranged.get_block(BlockPos::new(4, 0, 0)).is_some());
+    }
+
+    /// Every covered cell of a signed gap matches a naive placement over the
+    /// whole bounding box, including overlaps and reversed anchors.
+    #[test]
+    fn signed_gap_matches_naive_placement() {
+        const CASES: [(&[(i32, i32, i32)], i32); 6] = [
+            (&[(5, 1, 1); 4], 2),
+            (&[(5, 1, 1); 4], -2),
+            (&[(1, 1, 1); 3], -5),
+            (&[(6, 2, 4), (1, 5, 2), (3, 1, 1)], -4),
+            (&[(2, 2, 2); 3], 0),
+            (&[(4, 1, 1), (1, 4, 1), (2, 3, 2)], -1),
+        ];
+        for &(sizes, gap) in &CASES {
+            let arranged = arrange(sizes, gap);
+
+            let mut anchors = Vec::new();
+            let mut cursor = 0;
+            for &(x, _, _) in sizes {
+                anchors.push(cursor);
+                cursor += x + gap;
+            }
+            let first = anchors.iter().copied().min().unwrap_or(0);
+            let last = sizes
+                .iter()
+                .zip(&anchors)
+                .map(|(&(x, _, _), &anchor)| anchor - first + x)
+                .max()
+                .unwrap_or(0);
+            assert_eq!(arranged.size().x, last, "{sizes:?} at {gap}");
+
+            let size = arranged.size();
+            for z in 0..size.z {
+                for y in 0..size.y {
+                    for x in 0..size.x {
+                        let pos = BlockPos::new(x, y, z);
+                        let hit = sizes.iter().enumerate().any(|(i, &(sx, sy, sz))| {
+                            let start = anchors[i] - first;
+                            (start..start + sx).contains(&x)
+                                && (0..sy).contains(&y)
+                                && (0..sz).contains(&z)
+                        });
+                        assert_eq!(
+                            arranged.get_block(pos).is_some(),
+                            hit,
+                            "{pos:?} in {sizes:?} at {gap}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// An empty arrangement covers nothing and has zero size.
+    #[test]
+    fn empty_arrangement_has_no_size() {
+        let arranged = Arranged::<Solid>::new([], Axis::Easting, -3, &());
+
+        assert_eq!(arranged.size(), BlockPos::ORIGIN);
+        assert!(arranged.get_block(BlockPos::ORIGIN).is_none());
     }
 
     /// The window always reaches the highest covering item, so no scan can start
@@ -705,21 +809,22 @@ mod tests {
     fn window_reaches_highest_covering_item() {
         for &(sizes, pitch) in &CASES {
             let arranged = build(sizes, pitch);
-            let pitch = BlockPos::new(pitch.0, pitch.1, pitch.2);
-            let size = loose(sizes, pitch);
-            let lattice = &arranged.0.lattice;
-            let last = sizes.len() as i32 - 1;
+            let size = arranged.size();
             let mut needed = 0;
             for z in 0..size.z {
                 for y in 0..size.y {
                     for x in 0..size.x {
-                        let local = BlockPos::new(x, y, z) + origin(sizes, pitch);
-                        let top = (lattice.pitch.dot(local) - lattice.bias)
-                            .div_euclid(lattice.spacing)
-                            .min(last);
-                        let highest = (0..sizes.len())
-                            .rev()
-                            .find(|&i| hits(sizes, i, local - pitch * i as i32));
+                        let pos = BlockPos::new(x, y, z);
+                        let local = pos + arranged.anchor;
+                        let top = arranged.pitch.dot(local) - arranged.bias;
+                        let top = top
+                            .div_euclid(arranged.spacing)
+                            .min(arranged.items.len() as i32 - 1);
+                        let highest = (0..arranged.items.len()).rev().find(|&i| {
+                            arranged.items[i]
+                                .get_block(local - arranged.pitch * i as i32)
+                                .is_some()
+                        });
                         if let Some(highest) = highest {
                             needed = needed.max(top - highest as i32);
                         }
@@ -727,10 +832,55 @@ mod tests {
                 }
             }
             assert!(
-                arranged.0.span as i32 >= needed,
+                arranged.span >= needed,
                 "{pitch:?}: {needed} > {}",
-                arranged.0.span
+                arranged.span
             );
+        }
+    }
+
+    /// A sequence yielding every index, so a [`Sequenced`] container over it
+    /// behaves as a naive overlay: the lowest index wins.
+    struct Wide(usize);
+
+    impl Sequence for Wide {
+        fn candidates(&self, _pos: BlockPos) -> impl IntoIterator<Item = usize> {
+            0..self.0
+        }
+    }
+
+    /// The container places each item at its own anchor and stops at the first
+    /// hit the sequence offers.
+    #[test]
+    fn sequenced_places_items_at_their_anchors() {
+        let items = [
+            (BlockPos::ORIGIN, Solid(BlockPos::new(3, 1, 1))),
+            (BlockPos::new(1, 0, 0), Solid(BlockPos::new(2, 1, 1))),
+        ];
+        let arranged = Sequenced::new(items, Wide(2), &());
+
+        assert_eq!(arranged.size(), BlockPos::new(3, 1, 1));
+        for x in 0..3 {
+            assert!(arranged.get_block(BlockPos::new(x, 0, 0)).is_some(), "{x}");
+        }
+        assert!(arranged.get_block(BlockPos::new(3, 0, 0)).is_none());
+    }
+
+    /// A negative anchor is shifted into the box rather than clipped away.
+    #[test]
+    fn negative_anchor_shifts_into_the_box() {
+        let items = [
+            (BlockPos::new(-5, 0, 0), Solid(BlockPos::new(5, 1, 1))),
+            (BlockPos::new(3, 0, 0), Solid(BlockPos::new(2, 1, 1))),
+        ];
+        let arranged = Sequenced::new(items, Wide(2), &());
+
+        assert_eq!(arranged.size(), BlockPos::new(10, 1, 1));
+        for x in [0, 4, 8, 9] {
+            assert!(arranged.get_block(BlockPos::new(x, 0, 0)).is_some(), "{x}");
+        }
+        for x in [5, 6, 7, 10] {
+            assert!(arranged.get_block(BlockPos::new(x, 0, 0)).is_none(), "{x}");
         }
     }
 }
